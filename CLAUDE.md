@@ -20,7 +20,7 @@ or strong EI journal. Manuscript expected in 8 weeks.
 
 ## 2. Current Stage
 
-**Stage: 1 — Data Cleaning (not started)**
+**Stage: 1 — Data Cleaning (in progress; tasks 1-3 of 8 done)**
 
 Update this line whenever a stage starts or completes. See
 `docs/progress.md` for fine-grained log entries.
@@ -31,7 +31,7 @@ All 7 stages have detailed specs in `docs/plan/`:
 
 | Stage | File | Status |
 |-------|------|--------|
-| 1 | `docs/plan/stage1_data_cleaning.md` | not started |
+| 1 | `docs/plan/stage1_data_cleaning.md` | in progress (1-3/8) |
 | 2 | `docs/plan/stage2_spatial_discretization.md` | not started |
 | 3 | `docs/plan/stage3_od_construction.md` | not started |
 | 4 | `docs/plan/stage4_diffusion.md` | not started |
@@ -73,11 +73,18 @@ evtol-vertiport-rl/
 
 ## 5. Engineering Conventions
 
-- **Python**: 3.11. Type hints required on all public functions.
+- **Python**: target 3.11; current laptop env runs system 3.10.12
+  via `python3 -m venv .venv` (after `apt install python3.10-venv
+  python3-pip`). See `docs/decisions.md` 2026-05-14. Type hints
+  required on all public functions; prefer PEP 604 (`X | Y`) so
+  code stays valid under both 3.10 and 3.11.
 - **DL framework**: PyTorch 2.x. No TensorFlow.
-- **Config**: Hydra. Never hardcode paths or hyperparameters; read from
-  `configs/<step>.yaml`. Use `${oc.env:VAR}` for environment-dependent
-  paths so the same config works on laptop and GPU server.
+- **Config**: target Hydra; until Hydra is wired (planned around stage 4)
+  scripts may load `configs/<step>.yaml` directly with `pyyaml`. The
+  YAML file under `configs/<step>.yaml` is the source of truth either
+  way — never hardcode paths or hyperparameters in code. Once Hydra is
+  in, use `${oc.env:VAR}` for environment-dependent paths so the same
+  config works on laptop and GPU server.
 - **Seeding**: every script that uses randomness must call
   `src.utils.seed.set_seed(cfg.seed)` immediately after config load.
 - **Logging**: WandB by default (`wandb.init(project="evtol-vertiport",
@@ -94,6 +101,13 @@ evtol-vertiport-rl/
   `src/`, lenient on `experiments/` and `notebooks/`.
 - **Tests**: pytest. Aim for ~70% coverage on `src/data/` and
   `src/envs/` since those are the failure-prone glue layers.
+- **Test scope = current task**: a test must only assert properties
+  guaranteed by code that already exists. If the function under test
+  scales coordinates, do not also assert bbox containment — that
+  belongs to the filter step (a later task) and the assertion will
+  spuriously fail on data the future filter would have removed.
+  Pipeline-level acceptance tests cross task boundaries only inside
+  the final sub-task of each stage.
 - **Data files**: gitignored. Use `dvc` or just leave out of git.
   Commit small fixtures (<1 MB) under `tests/fixtures/`.
 - **Math**: vectorize with numpy/torch. Avoid python loops over
