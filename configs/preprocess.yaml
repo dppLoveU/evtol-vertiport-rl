@@ -1,0 +1,33 @@
+# Stage-1 preprocessing config.
+# Loaded by experiments/run_stage1_clean.py (Hydra wiring is a future
+# task; for now the keys here are the source of truth and tests / CLI
+# can read them with PyYAML directly).
+
+seed: 42
+
+input:
+  path: data/raw/suzhou_orders_7days.csv
+  encoding: utf-8
+  chunksize: 500000          # set null/0 for a single-shot read
+
+output:
+  path: data/processed/orders_clean.parquet
+  compression: snappy
+  row_group_size: 100000
+
+datetime:
+  # Real raw CSV format is "2023/7/16 10:43:05" (no zero-padding on
+  # month/day, seconds present). See docs/decisions.md 2026-05-14.
+  format: "%Y/%m/%d %H:%M:%S"
+
+filters:
+  bbox:
+    lon_min: 120.45
+    lon_max: 120.95
+    lat_min: 31.20
+    lat_max: 31.50
+  duration_min: [2.0, 180.0]   # minutes, inclusive
+  drive_km: [0.5, 100.0]
+  geo_dist_km_min: 0.3
+  geo_drive_ratio_max: 3.0     # drop rows where geo / drive >= this
+  fare_yuan: [0.0, 1000.0]     # exclusive lower (>0), inclusive upper

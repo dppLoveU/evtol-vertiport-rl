@@ -19,11 +19,11 @@ without re-checking edge cases.
 | `fDepLatitude`      | int           | divide by 1e6 → float lat       |
 | `fDestLongitude`    | int           | divide by 1e6                   |
 | `fDestLatitude`     | int           | divide by 1e6                   |
-| `fDepTime`          | "YYYY/M/D H:MM" str | parse to datetime         |
+| `fDepTime`          | "YYYY/M/D H:MM:SS" str | parse to datetime      |
 | `fDestTime`         | same          | parse to datetime               |
 | `fDriveMile`        | float (km)    | keep as `drive_km`              |
 | `fDriveTime`        | int (seconds) | divide by 60 → `drive_min`      |
-| `fWaitTime`         | int           | keep as `wait_min`              |
+| `fWaitTime`         | float         | keep as `wait_min`              |
 | `fFactPrice`        | float         | keep as `fare_yuan`             |
 | `AreaName`          | str           | keep                            |
 | `性别`              | str           | rename to `gender`              |
@@ -131,11 +131,16 @@ All other columns: drop.
 
 ## Common Pitfalls
 
-- **CSV encoding**: the file may be GBK-encoded due to Chinese chars in
-  some fields. Try `encoding="utf-8"` first; if `UnicodeDecodeError`,
-  try `encoding="gbk"` or `encoding="utf-8-sig"`.
-- **Datetime format**: month and day are not zero-padded ("2023/7/16",
-  not "2023/07/16"). Use `format="%Y/%m/%d %H:%M"` not the ISO one.
+- **CSV encoding**: confirmed UTF-8 for the current
+  `suzhou_orders_7days.csv` drop (verified 2026-05-14, Chinese column
+  names `性别` / `年龄` and `AreaName="苏州市"` decode cleanly). If a
+  future drop is GBK, pass `encoding="gbk"` (or `"utf-8-sig"` for BOM)
+  to `load_raw`.
+- **Datetime format**: month and day are not zero-padded
+  ("2023/7/16", not "2023/07/16") **and seconds are included**
+  ("2023/7/16 10:43:05"). Use `format="%Y/%m/%d %H:%M:%S"`. The plan
+  originally specified `%H:%M`; corrected on 2026-05-14 after
+  inspecting the real CSV (see `docs/decisions.md`).
 - **Coordinate edge case**: some rows have `0` for coordinates
   (placeholder for missing). Outlier filter (a) catches these.
 - **`fDriveTime` units**: seconds, not minutes. Easy to miss.

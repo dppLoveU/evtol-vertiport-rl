@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(conda env *)",
+      "Bash(conda --version)",
+      "Read(//home/yuri/data/evtol/raw/**)",
+      "Bash(python3 -m venv /home/yuri/code/transportation/evtol-vertiport-rl/.venv)",
+      "Bash(/home/yuri/code/transportation/evtol-vertiport-rl/.venv/bin/pip install *)",
+      "Bash(/home/yuri/code/transportation/evtol-vertiport-rl/.venv/bin/pip freeze *)",
+      "Bash(python3 -c \"import virtualenv; print\\(virtualenv.__version__\\)\")",
+      "Bash(python3 -c \"import pip; print\\(pip.__version__\\)\")",
+      "Read(//usr/lib/python3.10/**)",
+      "Bash(dpkg -l python3-venv)",
+      "Bash(.venv/bin/python *)"
+    ]
+  }
+}
