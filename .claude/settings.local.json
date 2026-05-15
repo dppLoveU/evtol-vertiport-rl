@@ -14,7 +14,9 @@
       "Bash(.venv/bin/python *)",
       "Bash(PYTHONPATH=/home/yuri/code/transportation/evtol-vertiport-rl /home/yuri/code/transportation/evtol-vertiport-rl/.venv/bin/python *)",
       "Bash(git ls-tree *)",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
