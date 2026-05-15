@@ -11,7 +11,10 @@
       "Bash(python3 -c \"import pip; print\\(pip.__version__\\)\")",
       "Read(//usr/lib/python3.10/**)",
       "Bash(dpkg -l python3-venv)",
-      "Bash(.venv/bin/python *)"
+      "Bash(.venv/bin/python *)",
+      "Bash(PYTHONPATH=/home/yuri/code/transportation/evtol-vertiport-rl /home/yuri/code/transportation/evtol-vertiport-rl/.venv/bin/python *)",
+      "Bash(git ls-tree *)",
+      "Bash(git check-ignore *)"
     ]
   }
 }

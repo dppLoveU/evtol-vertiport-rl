@@ -7,8 +7,9 @@
 ## 1. Goal
 
 A master's thesis project. Optimize the placement of eVTOL vertiports in
-Suzhou by:
-1. Aggregating ~4M ride-hailing orders into an OD demand tensor.
+the Suzhou metropolitan area (Suzhou City + the four county-level cities
+Kunshan, Changshu, Zhangjiagang, Taicang) by:
+1. Aggregating 4.26M ride-hailing orders (4,257,529 verified 2026-05-14) into an OD demand tensor.
 2. Training a diffusion model on the OD tensor to sample plausible
    counterfactual demand scenarios.
 3. Training an RL agent (MaskablePPO) to select K vertiport locations
@@ -147,9 +148,11 @@ These values are referenced throughout the codebase. Keep them in
 `src/constants.py` and never duplicate.
 
 ```python
-# Suzhou bounding box (approximate, refined in Stage 1 EDA)
-SUZHOU_BBOX = {"lon_min": 120.45, "lon_max": 120.95,
-               "lat_min": 31.20,  "lat_max": 31.50}
+# Suzhou metropolitan area bounding box (Suzhou City + 4 county-level
+# cities). Refined 2026-05-15 from per-area p1/p99 + ~2 km padding;
+# see results/stage1/eda/area_bounds.csv and docs/decisions.md.
+SUZHOU_BBOX = {"lon_min": 120.37, "lon_max": 121.33,
+               "lat_min": 30.88,  "lat_max": 32.01}
 
 # Raw coordinates are int (e.g. 120557806 = 120.557806°)
 COORD_SCALE = 1e6

@@ -1,12 +1,15 @@
 """Project-wide constants. Mirrors CLAUDE.md section 7 verbatim."""
 from __future__ import annotations
 
-# Suzhou bounding box (approximate, may be refined in Stage 1 EDA).
+# Suzhou metropolitan area bounding box. Covers Suzhou City + the four
+# county-level cities (Kunshan, Changshu, Zhangjiagang, Taicang). Refined
+# 2026-05-15 from per-area p1/p99 bounds + ~2 km padding; see
+# results/stage1/eda/area_bounds.csv and docs/decisions.md.
 SUZHOU_BBOX: dict[str, float] = {
-    "lon_min": 120.45,
-    "lon_max": 120.95,
-    "lat_min": 31.20,
-    "lat_max": 31.50,
+    "lon_min": 120.37,
+    "lon_max": 121.33,
+    "lat_min": 30.88,
+    "lat_max": 32.01,
 }
 
 # Raw coordinates are stored as int (e.g. 120557806 = 120.557806 deg).

@@ -218,10 +218,11 @@ __marimo__/
 .streamlit/secrets.toml
 
 
-data/
-results/
-models/
-wandb/
+# Project data dirs (anchored to repo root so src/data/ is NOT excluded).
+/data/
+/results/
+/models/
+/wandb/
 *.pyc
 .venv/
 .env

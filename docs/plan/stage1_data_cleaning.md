@@ -9,7 +9,13 @@ without re-checking edge cases.
 ## Inputs
 
 - **File**: `data/raw/suzhou_orders_7days.csv`
-- **Rows**: approximately 4,000,000
+- **Rows**: 4,257,529 (verified by full-file load 2026-05-14)
+- **Spatial scope**: Suzhou metropolitan area — 5 `AreaName` values,
+  shares roughly 苏州市 65% / 昆山市 19% / 常熟市 7% / 张家港市 6% /
+  太仓市 4% (verified 2026-05-15, see
+  `results/stage1/eda/area_bounds.csv`). `SUZHOU_BBOX` was widened on
+  2026-05-15 to encompass all five (see `docs/decisions.md`); the
+  earlier City-proper bbox dropped ~47.5% of rows by design.
 - **Schema notes** (only columns we care about; others to be dropped):
 
 | Column              | Raw type      | Cleaning                        |
@@ -97,7 +103,10 @@ All other columns: drop.
 ## Acceptance Criteria
 
 - [ ] `data/processed/orders_clean.parquet` exists.
-- [ ] Row count between 3,400,000 and 3,900,000 (5–15% drop is normal).
+- [ ] Row count between 3,620,000 and 4,150,000 (~2.5–15% drop from
+  the verified 4,257,529 raw rows; HI re-revised 2026-05-15 after
+  pressure test produced 4,050,523 rows / 4.86% drop under the
+  metro-area bbox — see `docs/decisions.md`).
 - [ ] `df.isna().sum()` returns 0 for every column.
 - [ ] All coordinates fall inside `SUZHOU_BBOX`.
 - [ ] `df.dtypes` matches the schema above exactly.
