@@ -220,7 +220,6 @@ __marimo__/
 
 # Project data dirs (anchored to repo root so src/data/ is NOT excluded).
 /data/
-/results/
 /models/
 /wandb/
 *.pyc
