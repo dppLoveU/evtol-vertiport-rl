@@ -8,6 +8,10 @@ dependencies = [
     "pyarrow>=14.0",
     "numpy>=1.24",
     "pyyaml>=6.0",
+    # Stage-1 EDA report (task 8). matplotlib for hand-picked plots,
+    # ydata-profiling for the auto-generated HTML summary.
+    "matplotlib>=3.7",
+    "ydata-profiling>=4.6",
 ]
 
 [project.optional-dependencies]
