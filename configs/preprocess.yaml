@@ -21,11 +21,14 @@ datetime:
   format: "%Y/%m/%d %H:%M:%S"
 
 filters:
+  # bbox = Suzhou metropolitan area envelope (5 AreaNames). Refined
+  # 2026-05-15 from results/stage1/eda/area_bounds.csv; see
+  # docs/decisions.md. Original City-proper bbox dropped ~47.5% of rows.
   bbox:
-    lon_min: 120.45
-    lon_max: 120.95
-    lat_min: 31.20
-    lat_max: 31.50
+    lon_min: 120.37
+    lon_max: 121.33
+    lat_min: 30.88
+    lat_max: 32.01
   duration_min: [2.0, 180.0]   # minutes, inclusive
   drive_km: [0.5, 100.0]
   geo_dist_km_min: 0.3
