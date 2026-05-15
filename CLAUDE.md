@@ -21,7 +21,7 @@ or strong EI journal. Manuscript expected in 8 weeks.
 
 ## 2. Current Stage
 
-**Stage: 1 — Data Cleaning (in progress; tasks 1-3 of 8 done)**
+**Stage: 1 — Data Cleaning (complete, 8/8). Next: Stage 2 — Spatial Discretization.**
 
 Update this line whenever a stage starts or completes. See
 `docs/progress.md` for fine-grained log entries.
@@ -32,7 +32,7 @@ All 7 stages have detailed specs in `docs/plan/`:
 
 | Stage | File | Status |
 |-------|------|--------|
-| 1 | `docs/plan/stage1_data_cleaning.md` | in progress (1-3/8) |
+| 1 | `docs/plan/stage1_data_cleaning.md` | **complete (8/8) 2026-05-15** |
 | 2 | `docs/plan/stage2_spatial_discretization.md` | not started |
 | 3 | `docs/plan/stage3_od_construction.md` | not started |
 | 4 | `docs/plan/stage4_diffusion.md` | not started |
