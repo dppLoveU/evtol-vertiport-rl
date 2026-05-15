@@ -34,3 +34,4 @@ filters:
   geo_dist_km_min: 0.3
   geo_drive_ratio_max: 3.0     # drop rows where geo / drive >= this
   fare_yuan: [0.0, 1000.0]     # exclusive lower (>0), inclusive upper
+  wait_min: [0.0, 120.0]       # plan extension; see docs/decisions.md 2026-05-14
