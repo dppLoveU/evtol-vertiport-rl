@@ -387,3 +387,40 @@ cities) is under-represented in the OD tensors. The Stage-3 EDA and the
 paper's Case Study must state this explicitly — the vertiport siting
 optimizes over the 530-zone metro core, not the full administrative
 footprint.
+
+---
+
+## 2026-05-18 — Stage 3: low-altitude eligibility threshold treated as provisional baseline
+
+**Context**: Stage 3 labels an order eVTOL-eligible when
+`geo_dist_km >= 15` AND `duration_min >= 25` AND `o_zone != d_zone`.
+
+**Status**: this `15 km / 25 min` cut is a *provisional baseline*, NOT a
+settled transport-science standard. It rests on an engineering
+assumption — low-altitude air mobility substitutes best for
+medium-to-long, time-consuming ground trips. Stage 3 therefore does not
+claim 15 km / 25 min is the optimal threshold; it is the baseline
+scenario only.
+
+**Sensitivity evidence (R3, task 9)**: with the duration threshold held
+at 25 min, the distance sweep gives these eligible shares (of
+zone-assigned orders):
+- 10 km — 10.04%
+- 12 km —  7.98%
+- 15 km —  5.19%  (baseline)
+- 18 km —  3.36%
+- 20 km —  2.47%
+
+**Main-line decision**: keep 15 km on the main line — it is consistent
+with the already-built `od_evtol.npy` / `od_meta.json`, and its 5.19%
+share is inside the `[0.03, 0.20]` acceptance window.
+
+**Fallback / robustness scenario**: 12 km (7.98%) is the designated
+fallback. If Stage-4 diffusion or Stage-5/6 RL underperforms because the
+eVTOL OD tensor is too sparse (`od_evtol` nonzero_ratio is only 0.117%),
+switch to 12 km and regenerate the OD tensors.
+
+**Paper-writing constraint**: the manuscript must describe this cut as a
+threshold-based proxy / baseline definition / sensitivity-tested
+assumption — never as the single ground-truth definition of
+low-altitude mobility demand.
