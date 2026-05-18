@@ -222,10 +222,11 @@ __marimo__/
 /data/
 /models/
 /wandb/
-/results/
 # osmnx HTTP response cache (auto-created)
 cache/
 *.pyc
 .venv/
 .env
 .DS_Store
+# Claude local settings
+.claude/settings.local.json

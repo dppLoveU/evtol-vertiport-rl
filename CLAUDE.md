@@ -21,7 +21,7 @@ or strong EI journal. Manuscript expected in 8 weeks.
 
 ## 2. Current Stage
 
-**Stage: 3 — OD Tensor Construction & eVTOL Filtering (not started; next)**
+**Stage: 4 — Diffusion Model for OD Generation (not started; next)**
 
 Update this line whenever a stage starts or completes. See
 `docs/progress.md` for fine-grained log entries.
@@ -34,7 +34,7 @@ All 7 stages have detailed specs in `docs/plan/`:
 |-------|------|--------|
 | 1 | `docs/plan/stage1_data_cleaning.md` | **complete (8/8) 2026-05-15** |
 | 2 | `docs/plan/stage2_spatial_discretization.md` | **complete (6/6) 2026-05-18** |
-| 3 | `docs/plan/stage3_od_construction.md` | not started |
+| 3 | `docs/plan/stage3_od_construction.md` | **complete (9/9) 2026-05-18** |
 | 4 | `docs/plan/stage4_diffusion.md` | not started |
 | 5 | `docs/plan/stage5_rl_env.md` | not started |
 | 6 | `docs/plan/stage6_rl_training.md` | not started |
@@ -157,9 +157,12 @@ SUZHOU_BBOX = {"lon_min": 120.37, "lon_max": 121.33,
 # Raw coordinates are int (e.g. 120557806 = 120.557806°)
 COORD_SCALE = 1e6
 
-# Time discretization
+# Time discretization. Stage 3's OD time window is 11 full calendar
+# days [2023-07-10 00:00:00, 2023-07-21 00:00:00) — revised from the
+# planned 7-day window after R1.5 found the data spans 12.45 days.
+# See docs/decisions.md 2026-05-18.
 TIME_BIN_MIN = 30           # 30-minute slots
-NUM_TIME_BINS = 7 * 24 * 60 // TIME_BIN_MIN  # = 336
+NUM_TIME_BINS = 11 * 24 * 60 // TIME_BIN_MIN  # = 528
 
 # eVTOL trip eligibility (refined in Stage 3 sensitivity analysis)
 EVTOL_MIN_DIST_KM = 15.0

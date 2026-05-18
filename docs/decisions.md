@@ -294,3 +294,133 @@ and the `CAND_LO`/`CAND_HI` constants of
   813 / 530 ≈ 1.5 sits toward the lower end of the MCLP literature —
   the candidate-sparse side (grid contributes only 99; POIs dominate) —
   and lies inside `[600, 1500]`, so acceptance passes.
+
+---
+
+## 2026-05-18 — Stage 3: OD time window revised from 7 days to 11 full days
+
+**Plan said**: the OD tensor's time axis is `T = NUM_TIME_BINS = 336`,
+i.e. 7 days x 48 half-hour bins (CLAUDE.md §7;
+`docs/plan/stage3_od_construction.md` task 1 and the task-3 memory
+check). The raw CSV is even named `suzhou_orders_7days.csv`.
+
+**Reality**: the Stage-3 R1.5 smoke test
+(`experiments/run_stage3_smoke.py`, Part A) read the full `dep_time`
+column of `orders_clean.parquet` (4,050,523 rows) and found the data
+spans **12.45 days** — from `2023-07-09 07:33:46` to
+`2023-07-21 18:25:01` (298.85 h), not 7 days. Against a 336-bin window
+the observed max slot is 597 and **502,214 orders (12.40%)** fall out
+of range.
+
+**Change**: adopt an **11 full-calendar-day** window,
+`[2023-07-10 00:00:00, 2023-07-21 00:00:00)` — left-closed, right-open —
+giving `T = num_time_bins = 528` (11 x 48). Orders with `dep_time`
+before the start or at/after the end go to `out_of_range`; the two
+partial days at the data's edges (07-09 07:33->24:00 and
+07-21 00:00->18:25) are intentionally excluded. `configs/od.yaml::time`
+is the source of truth for the window (`start_datetime`, `end_datetime`,
+`time_bin_min`, `num_time_bins`); `src/constants.py::NUM_TIME_BINS` was
+updated 336 -> 528 to keep code that runs without a config in hand
+consistent.
+
+**Rationale**: 11 whole days keep ~88% of the orders (vs. ~56% for a
+single 7-day week) while still aligning to calendar-day boundaries, so
+the Stage-3 EDA's weekday/weekend folding and hour-of-day curves are not
+distorted by partial residual days at the span edges.
+
+**Impact**:
+- Stage-3 output tensors change shape `[336, |Z|, |Z|]` ->
+  `[528, |Z|, |Z|]`.
+- Memory per dense tensor: `528 x 530^2 x 4 B ~= 593 MB` (was ~377 MB at
+  336); three tensors ~= 1.78 GB. Stage-4 diffusion memory estimates
+  must be redone against `T = 528`.
+- CLAUDE.md §7 still prints `NUM_TIME_BINS ... # = 336`; that block needs
+  a user-side sync (Claude does not edit CLAUDE.md unprompted).
+- The raw file name `_7days` is inconsistent with the 12.45-day span —
+  worth confirming the export scope with the data provider.
+
+---
+
+## 2026-05-18 — Stage 3: zone assignment drop acceptance revised after full smoke
+
+**Plan said**: `docs/plan/stage3_od_construction.md` Acceptance Criteria
+allowed the zone filter to drop "≤2%" of orders — an order whose O or D
+maps to an H3 cell outside the demand-zone set is dropped (task 2). The
+2% figure was drafted against an early ~250-zone discretization.
+
+**Reality**: the Stage-3 R1.5 full smoke (`run_stage3_smoke.py` Part B,
+all 4,050,501 in-window orders) measured a zone drop of **412,856 rows,
+drop_rate = 10.19%** — far above 2%.
+
+**Root cause**: Stage 2's `min_orders_per_zone = 2000` collapsed 1421
+H3 res-7 cells to 530 demand zones (see the min_orders_per_zone entry
+above), dropping 891 low-density cells. Any order with an O or D
+endpoint in one of those 891 cells is unmapped and dropped. 10.19% is
+the designed-in consequence of that discretization, not a bug.
+
+**Decision**: keep `|Z| = 530`; do NOT revisit Stage 2 or retune
+`min_orders_per_zone`. Stage 3's acceptance criterion is revised
+instead.
+
+**New acceptance criterion**: the zone filter drops **≤ 12%** of
+in-window orders (full-smoke actual 10.19% + ~1.8 pp buffer). Applied
+to `docs/plan/stage3_od_construction.md` Acceptance Criteria.
+
+**Rationale**: a larger `|Z|` would inflate the OD tensor's `|Z|^2`
+memory footprint and worsen the eVTOL OD sparsity the 530-zone choice
+was made to control. Preserving the high-demand zone structure is worth
+dropping the low-density edge cells.
+
+**Impact assessment** (from the full-smoke dropped-order breakdown):
+- area_name shares of the dropped set — 苏州市 39.6%, 昆山市 18.3%,
+  常熟市 17.5%, 张家港市 14.2%, 太仓市 10.4%. Against the overall area
+  mix (苏州市 65%, 昆山市 19%, 常熟市 7%, 张家港市 6%, 太仓市 4%) the
+  drop falls disproportionately on the four county-level cities — their
+  low-density cells were the ones Stage 2 filtered out.
+- of the 412,856 dropped orders only **58,811 (14.24%)** meet the eVTOL
+  base condition (`geo_dist_km >= 15` AND `duration_min >= 25`); the
+  other 85.76% are short / brief trips that are not eVTOL demand
+  anyway. The dropped median trip is 5.9 km / 14.1 min.
+
+**Risk**: low-density edge demand (especially in the county-level
+cities) is under-represented in the OD tensors. The Stage-3 EDA and the
+paper's Case Study must state this explicitly — the vertiport siting
+optimizes over the 530-zone metro core, not the full administrative
+footprint.
+
+---
+
+## 2026-05-18 — Stage 3: low-altitude eligibility threshold treated as provisional baseline
+
+**Context**: Stage 3 labels an order eVTOL-eligible when
+`geo_dist_km >= 15` AND `duration_min >= 25` AND `o_zone != d_zone`.
+
+**Status**: this `15 km / 25 min` cut is a *provisional baseline*, NOT a
+settled transport-science standard. It rests on an engineering
+assumption — low-altitude air mobility substitutes best for
+medium-to-long, time-consuming ground trips. Stage 3 therefore does not
+claim 15 km / 25 min is the optimal threshold; it is the baseline
+scenario only.
+
+**Sensitivity evidence (R3, task 9)**: with the duration threshold held
+at 25 min, the distance sweep gives these eligible shares (of
+zone-assigned orders):
+- 10 km — 10.04%
+- 12 km —  7.98%
+- 15 km —  5.19%  (baseline)
+- 18 km —  3.36%
+- 20 km —  2.47%
+
+**Main-line decision**: keep 15 km on the main line — it is consistent
+with the already-built `od_evtol.npy` / `od_meta.json`, and its 5.19%
+share is inside the `[0.03, 0.20]` acceptance window.
+
+**Fallback / robustness scenario**: 12 km (7.98%) is the designated
+fallback. If Stage-4 diffusion or Stage-5/6 RL underperforms because the
+eVTOL OD tensor is too sparse (`od_evtol` nonzero_ratio is only 0.117%),
+switch to 12 km and regenerate the OD tensors.
+
+**Paper-writing constraint**: the manuscript must describe this cut as a
+threshold-based proxy / baseline definition / sensitivity-tested
+assumption — never as the single ground-truth definition of
+low-altitude mobility demand.

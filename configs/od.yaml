@@ -1,0 +1,51 @@
+# Stage-3 OD tensor construction config.
+# Loaded by experiments/run_stage3_*.py (PyYAML; Hydra wiring is a future
+# task -- see docs/decisions.md 2026-05-14). The keys here are the source
+# of truth; code reads them and never hardcodes values.
+#
+# R1 (tasks 1-2) consumes only the `input`, `time` and `evtol_filter`
+# sections. The rest is written ahead as the single source of truth for
+# later R2/R3/R4 sub-tasks.
+
+seed: 42
+
+input:
+  orders_path: data/processed/orders_clean.parquet
+  zones_path: data/processed/zones.geojson
+
+time:
+  # Stage-3 OD time window: 11 FULL calendar days, revised from the
+  # original plan's 7-day / 336-bin window. R1.5 smoke found dep_time
+  # actually spans 12.45 days (2023-07-09 07:33 .. 2023-07-21 18:25), so
+  # a 7-day window would drop 12.4% of orders. See docs/decisions.md
+  # 2026-05-18. The window is left-closed / right-open: [start, end).
+  # Orders with dep_time < start or dep_time >= end are out-of-range.
+  start_datetime: "2023-07-10 00:00:00"   # left-closed window start (t0)
+  end_datetime: "2023-07-21 00:00:00"     # right-open window end (= start + 11 days)
+  time_bin_min: 30                        # minutes per OD time slot
+  num_time_bins: 528                      # 11 days * 24 h * 60 / 30
+
+evtol_filter:
+  # An order is eVTOL-eligible iff ALL of (a)-(c) hold. Thresholds live
+  # here for the Stage-3 sensitivity sweep.
+  min_dist_km: 15.0            # (a) geo_dist_km >= this (EVTOL_MIN_DIST_KM)
+  min_duration_min: 25.0       # (b) duration_min >= this (EVTOL_MIN_DURATION_MIN)
+  drop_intra_zone: true        # (c) o_zone != d_zone
+
+weight:
+  # Column summed for od_evtol_weighted. "fare_yuan" (default) or
+  # "duration_min" (time-savings proxy).
+  column: fare_yuan
+
+output:
+  od_full_path: data/processed/od_full.npy
+  od_evtol_path: data/processed/od_evtol.npy
+  od_evtol_weighted_path: data/processed/od_evtol_weighted.npy
+  meta_path: data/processed/od_meta.json
+
+eda:
+  output_dir: results/stage3/eda     # paper figures (task 8); results/ is gitignored
+
+sensitivity:
+  dist_km_sweep: [10.0, 12.0, 15.0, 18.0, 20.0]
+  output_path: results/stage3/sensitivity.csv
