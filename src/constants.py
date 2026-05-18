@@ -1,4 +1,9 @@
-"""Project-wide constants. Mirrors CLAUDE.md section 7 verbatim."""
+"""Project-wide constants. Mirrors CLAUDE.md section 7.
+
+Note: ``NUM_TIME_BINS`` was revised 336 -> 528 in Stage 3 — the OD time
+window moved from 7 days to 11 full calendar days. See docs/decisions.md
+2026-05-18.
+"""
 from __future__ import annotations
 
 # Suzhou metropolitan area bounding box. Covers Suzhou City + the four
@@ -15,9 +20,14 @@ SUZHOU_BBOX: dict[str, float] = {
 # Raw coordinates are stored as int (e.g. 120557806 = 120.557806 deg).
 COORD_SCALE: float = 1e6
 
-# Time discretization.
+# Time discretization. TIME_BIN_MIN is the OD slot width in minutes.
+# NUM_TIME_BINS was revised from 336 (planned 7-day window) to 528 after
+# Stage-3 R1.5 found the data spans 12.45 days; the OD tensor now covers
+# 11 full calendar days (2023-07-10 .. 2023-07-21). configs/od.yaml::time
+# is the source of truth for the window; this constant mirrors it for
+# code paths that run without a config loaded. See docs/decisions.md.
 TIME_BIN_MIN: int = 30
-NUM_TIME_BINS: int = 7 * 24 * 60 // TIME_BIN_MIN  # = 336
+NUM_TIME_BINS: int = 11 * 24 * 60 // TIME_BIN_MIN  # = 528 (was 336 for 7 days)
 
 # eVTOL trip eligibility thresholds (refined in Stage 3 sensitivity).
 EVTOL_MIN_DIST_KM: float = 15.0

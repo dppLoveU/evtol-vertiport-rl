@@ -157,9 +157,12 @@ SUZHOU_BBOX = {"lon_min": 120.37, "lon_max": 121.33,
 # Raw coordinates are int (e.g. 120557806 = 120.557806°)
 COORD_SCALE = 1e6
 
-# Time discretization
+# Time discretization. Stage 3's OD time window is 11 full calendar
+# days [2023-07-10 00:00:00, 2023-07-21 00:00:00) — revised from the
+# planned 7-day window after R1.5 found the data spans 12.45 days.
+# See docs/decisions.md 2026-05-18.
 TIME_BIN_MIN = 30           # 30-minute slots
-NUM_TIME_BINS = 7 * 24 * 60 // TIME_BIN_MIN  # = 336
+NUM_TIME_BINS = 11 * 24 * 60 // TIME_BIN_MIN  # = 528
 
 # eVTOL trip eligibility (refined in Stage 3 sensitivity analysis)
 EVTOL_MIN_DIST_KM = 15.0

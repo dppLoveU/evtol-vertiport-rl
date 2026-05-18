@@ -48,10 +48,16 @@ section.
 ## Tasks
 
 1. **Time bin assignment** (`src/data/od.py`, `assign_time_bin`):
-   - Define `t0 = min(dep_time)`.
+   - The OD time window is 11 full calendar days,
+     `[2023-07-10 00:00:00, 2023-07-21 00:00:00)` — left-closed,
+     right-open. `t0` is the configured `start_datetime`, NOT
+     `min(dep_time)`; see `configs/od.yaml::time` and
+     `docs/decisions.md` 2026-05-18.
    - For each order, `slot = floor((dep_time - t0).total_seconds() /
      (TIME_BIN_MIN * 60))`.
-   - Assert `0 <= slot < NUM_TIME_BINS`.
+   - Orders with `slot < 0` or `slot >= NUM_TIME_BINS` (= 528) — the
+     two residual partial days at the data's edges — are dropped to
+     `out_of_range`, not clamped.
 
 2. **Zone assignment** (`assign_zones`):
    - Compute H3 index at resolution 7 for each order's O and D.
@@ -62,9 +68,11 @@ section.
 3. **Build `od_full`** (`build_od_tensor`):
    - Group by `(slot, o_zone, d_zone)`, count rows.
    - Materialize into a dense `[T, |Z|, |Z|]` int32 numpy array.
-   - Memory check: `T * |Z|^2 * 4 bytes`. With `T=336, |Z|=250`,
-     that's 336 * 62500 * 4 ≈ 84 MB. Fine. If `|Z|` ends up >400,
-     consider sparse representation (`scipy.sparse.COO` per slot).
+   - Memory check: `T * |Z|^2 * 4 bytes`. With `T=528, |Z|=530`,
+     that's 528 * 530 * 530 * 4 ≈ 593 MB per tensor; the three dense
+     tensors (od_full, od_evtol, od_evtol_weighted) total ≈ 1.78 GB.
+     If memory becomes unacceptable, add a sparse `.npz` auxiliary
+     product (see Common Pitfalls).
 
 4. **Define eVTOL filter** (`is_evtol_eligible`):
    An order is eVTOL-eligible if ALL hold:
@@ -102,8 +110,8 @@ section.
 ## Acceptance Criteria
 
 - [ ] `od_full.sum()` equals the number of orders whose O and D both
-  fall into known zones (allow ≤2% drop from Stage 1 total due to zone
-  filter).
+  fall into known zones. The zone filter drops ≤12% of in-window
+  orders (full-smoke actual 10.19%; see docs/decisions.md 2026-05-18).
 - [ ] `od_evtol.sum() / od_full.sum()` is in `[0.03, 0.20]`. If outside
   this range, revisit the eVTOL thresholds.
 - [ ] No NaN, no negative values.
@@ -130,21 +138,23 @@ section.
 
 ## Common Pitfalls
 
-- **Time bin off-by-one**: orders right at `t0 + 7*24*60 minutes` get
-  `slot == NUM_TIME_BINS` (out of range). Clamp or drop.
+- **Time bin off-by-one**: orders right at `t0 + 11*24*60 minutes` get
+  `slot == NUM_TIME_BINS` (out of range). The window is right-open, so
+  these are dropped, not clamped.
 - **Zone lookup speed**: a naive Python dict lookup over 4M rows is
   slow (~30 s). Use `pd.Series.map` with a dict, or join on H3 index.
-- **Dense vs sparse**: `od_evtol` is mostly zeros. Saving as `.npy`
-  dense is fine for `|Z| ≤ 300` but uses 80+ MB. Consider also saving
-  a sparse `.npz` (`scipy.sparse.save_npz` for each slot stacked) if
-  Stage 4 needs faster IO.
+- **Dense vs sparse**: `od_evtol` is mostly zeros. At `T=528, |Z|=530`
+  each dense `.npy` is ≈ 593 MB (≈ 1.78 GB for all three). Dense is the
+  default (Stage 4 reads dense tensors), but if memory or IO becomes
+  unacceptable, also save a sparse `.npz` (`scipy.sparse.save_npz` for
+  each slot stacked).
 - **`scipy.sparse` and 3D**: scipy sparse is 2D only. For 3D, store a
   list of `T` sparse matrices in a pickle, or stick with dense.
 - **Weighted aggregation**: when computing `od_evtol_weighted`, do not
   forget to apply the eVTOL filter. Easy mistake when refactoring.
 - **EDA double-counting**: when plotting "trip volume by hour", aggregate
-  by `slot % 48` to fold the 7 days, but compute weekday/weekend
-  separately to show pattern differences. Don't average all 7 days into
+  by `slot % 48` to fold the 11 days, but compute weekday/weekend
+  separately to show pattern differences. Don't average all 11 days into
   one curve if the pattern matters.
 - **Figure reuse**: every figure produced here will likely appear in
   the paper. Generate both PNG (for slides) and PDF (for LaTeX).
