@@ -1,14 +1,15 @@
 """Stage-2 build CLI: cleaned orders -> demand zones + candidate sites.
 
 Reads ``configs/spatial.yaml`` (PyYAML; Hydra wiring is deferred — see
-``docs/decisions.md`` 2026-05-14) and runs stage-2 tasks 1-4:
+``docs/decisions.md`` 2026-05-14) and runs stage-2 tasks 1-5:
 
   1. build H3 demand zones          -> data/processed/zones.geojson
   2. pull OSM POI candidates        (cached under data/raw/)
   3. pad with uniform-grid candidates
   4. merge + finalize candidates    -> data/processed/candidates.geojson
+  5. build distance/coverage matrices -> data/processed/*.npy + spatial_meta.json
 
-Task 5 (build_matrices) is not yet wired.
+Task 6 (folium maps) lives in experiments/run_stage2_maps.py.
 
 Run:
     python -m experiments.run_stage2_build
@@ -17,10 +18,13 @@ Run:
 from __future__ import annotations
 
 import argparse
+import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -31,6 +35,7 @@ from src.data.candidates import (
     finalize_candidates,
     pull_poi,
 )
+from src.data.spatial import build_matrices
 from src.data.zones import build_zones
 
 REPO = Path(__file__).resolve().parents[1]
@@ -41,6 +46,9 @@ DEFAULT_CONFIG = REPO / "configs" / "spatial.yaml"
 # expansion — see docs/decisions.md). Soft sanity check, not an exception.
 ZONE_LO, ZONE_HI = 350, 800
 CAND_LO, CAND_HI = 600, 1500
+# >= 85% of demand zones must have a candidate within walk radius
+# (stage2 plan Acceptance Criteria). Below this the problem is degenerate.
+COVERAGE_MIN = 0.85
 
 
 def _resolve(path_str: str) -> Path:
@@ -122,7 +130,54 @@ def run(cfg: dict[str, Any]) -> dict[str, Any]:
     for src, n in candidates["source"].value_counts().items():
         print(f"    {src:<16}: {n}")
 
-    print("[note] task 5 (build_matrices) not yet implemented")
+    # --- Task 5: distance + coverage matrices --------------------------
+    mcfg = cfg["matrices"]
+    walk_radius_km = float(mcfg["walk_radius_km"])
+    print(f"[matrices] building distance/coverage matrices (walk_radius_km={walk_radius_km})")
+    mats = build_matrices(zones, candidates, walk_radius_km=walk_radius_km)
+
+    dzz_path = _resolve(mcfg["dist_zone_zone_path"])
+    dzc_path = _resolve(mcfg["dist_zone_cand_path"])
+    cov_path = _resolve(mcfg["cand_covers_zones_path"])
+    for p in (dzz_path, dzc_path, cov_path):
+        p.parent.mkdir(parents=True, exist_ok=True)
+    np.save(dzz_path, mats["dist_zone_zone"])
+    np.save(dzc_path, mats["dist_zone_cand"])
+    np.save(cov_path, mats["cand_covers_zones"])
+    print(f"  dist_zone_zone   {mats['dist_zone_zone'].shape} -> {dzz_path}")
+    print(f"  dist_zone_cand   {mats['dist_zone_cand'].shape} -> {dzc_path}")
+    print(f"  cand_covers_zones {mats['cand_covers_zones'].shape} -> {cov_path}")
+
+    coverage_ratio = mats["coverage_ratio"]
+    cov_ok = coverage_ratio >= COVERAGE_MIN
+    print(
+        f"  coverage_ratio={coverage_ratio:.4f}  "
+        f"({'PASS' if cov_ok else 'CHECK'} target >= {COVERAGE_MIN})"
+    )
+    if not cov_ok:
+        print(
+            "  -> coverage below threshold; STOP and report — do not "
+            "auto-tune walk_radius or candidate params"
+        )
+
+    source_counts = {
+        str(src): int(n) for src, n in candidates["source"].value_counts().items()
+    }
+    meta = {
+        "n_zones": mats["n_zones"],
+        "n_candidates": mats["n_candidates"],
+        "walk_radius_km": mats["walk_radius_km"],
+        "h3_resolution": int(zcfg["h3_resolution"]),
+        "source_counts": source_counts,
+        "coverage_ratio": coverage_ratio,
+        "build_timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    meta_path = _resolve(cfg["meta_path"])
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(meta_path, "w") as fh:
+        json.dump(meta, fh, indent=2)
+    print(f"  spatial_meta.json -> {meta_path}")
+
     print(f"[total wall time: {time.time() - t0:.1f}s]")
 
     return {
@@ -133,6 +188,8 @@ def run(cfg: dict[str, Any]) -> dict[str, Any]:
         "n_cand": n_cand,
         "zones_ok": z_ok,
         "cand_ok": c_ok,
+        "coverage_ratio": coverage_ratio,
+        "coverage_ok": cov_ok,
     }
 
 

@@ -21,7 +21,7 @@ or strong EI journal. Manuscript expected in 8 weeks.
 
 ## 2. Current Stage
 
-**Stage: 2 — Spatial Discretization (in progress; tasks 1-4 of 6 done; next task 5 build_matrices)**
+**Stage: 2 — Spatial Discretization (in progress; tasks 1-5 of 6 done; next task 6 maps)**
 
 Update this line whenever a stage starts or completes. See
 `docs/progress.md` for fine-grained log entries.
@@ -33,7 +33,7 @@ All 7 stages have detailed specs in `docs/plan/`:
 | Stage | File | Status |
 |-------|------|--------|
 | 1 | `docs/plan/stage1_data_cleaning.md` | **complete (8/8) 2026-05-15** |
-| 2 | `docs/plan/stage2_spatial_discretization.md` | **in progress (4/6)** |
+| 2 | `docs/plan/stage2_spatial_discretization.md` | **in progress (5/6)** |
 | 3 | `docs/plan/stage3_od_construction.md` | not started |
 | 4 | `docs/plan/stage4_diffusion.md` | not started |
 | 5 | `docs/plan/stage5_rl_env.md` | not started |
