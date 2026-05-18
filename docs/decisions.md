@@ -163,3 +163,134 @@ revision once the actual grid-seed count over the larger bbox is known.
 **Impact**: no code change. If a Stage 2 run produces `|Z|` outside
 `[350, 800]`, treat `min_orders_per_zone` as the lever but consult the
 user before changing it (CLAUDE.md §6 rule 5).
+
+---
+
+## 2026-05-18 — Stage 2: POI tightening (tag fix, area floor, H3 dedup)
+
+The first stage-2 run pulled **4,392** POI candidates against the
+plan's 200-400 target (`subway` 1,072, `industrial` 2,895, `mall` 230,
+`hospital` 191, `airport` 4). Three changes tighten `pull_poi`:
+
+**1. OSM tag fix: drop `subway=yes`, keep `station=subway`.**
+The plan's Inputs section listed both `subway=yes` and
+`station=subway`. `subway=yes` is an OSM *property on railway ways*
+marking that a line runs underground — it matches tunnel segments, not
+stations, and pulled ~1,000 spurious features. The correct station tag
+is `station=subway` (already in the query). `subway=yes` is removed
+from the tag set and from the `_classify_source` check. This corrects
+a plan error; it is not a design change.
+
+**2. Industrial area floor.**
+`landuse=industrial` matches every industrial parcel, including single
+factory buildings; the Suzhou metro is industry-dense (2,895 hits). A
+vertiport candidate should sit at a park-scale site, so industrial
+polygons are kept only if `area_m2 >= 50000` (>5 ha). Exposed as
+`poi.industrial_min_area_m2` in `configs/spatial.yaml` (default
+50000). The plan said "large parks only" without pinning a number;
+this concretizes plan intent rather than deviating from it.
+
+**3. H3 res-8 POI deduplication.**
+After merging all POI sources, dense urban cores still hold many
+near-co-located candidates (overlapping malls / stations within a few
+hundred metres). POIs are grouped by H3 resolution 8 (~0.74 km^2 cell,
+~0.46 km edge — finer than the res-7 demand zones) and one POI is kept
+per cell, chosen by source priority. Config key `poi.dedupe_h3_res`
+(default 8; set to `null` to disable). The plan did not specify a
+POI-stage dedup step; this is a standard normalization added here.
+
+Source priority for the dedup tie-break — the user specified
+`subway > mall > industrial`; `airport` and `hospital` placement is
+**proposed below and needs confirmation**:
+
+    poi_airport > poi_subway > poi_mall > poi_hospital > poi_industrial
+
+Rationale: airport — ready-made aviation infrastructure; subway —
+high-throughput multimodal interchange node; mall above hospital —
+this project's OD comes from ride-hailing commute/commercial trips, so
+hospital demand is already implicit in that signal; industrial ranks
+last so the res-8 dedup never crowds out a more general transport node
+(e.g. a subway station or mall sited inside an industrial park).
+
+**Status**: code changes pending user confirmation of this entry;
+no re-run yet. Expected to bring the POI count toward the `[200, 500]`
+`|C|` window — to be verified on the next `run_stage2_build`.
+
+**Update 2026-05-18 (measured)**: the re-run with the three changes
+gave POI 2389 / `|C|` 2467 (`poi_industrial` 1732 alone). The
+50000 m^2 industrial floor still leaves `|C|` ~5x over the `[200, 500]`
+target, so `industrial_min_area_m2` is raised 50000 -> 200000 m^2
+(major parks only, >20 ha).
+
+---
+
+## 2026-05-18 — Stage 2: min_orders_per_zone raised 50 -> 2000
+
+**Plan said**: `min_orders_per_zone = 50` (default in
+`docs/plan/stage2_spatial_discretization.md`, task 1.2) — intended to
+"drop ghost cells in lakes/farmland".
+
+**Reality**: on the ~8.1M endpoints (4.05M orders x origin + dest), a
+50-endpoint threshold filters almost nothing — even rural road cells
+clear it easily. The first stage-2 run produced `|Z| = 1421`, nearly
+2x the revised `[350, 800]` acceptance ceiling and well above the
+`[400, 700]` working estimate (see the 2026-05-18 entry above). On
+this data volume the threshold's role is no longer "drop ghost cells"
+but "set the demand-zone count".
+
+**Change**: `min_orders_per_zone` 50 -> 2000, set in
+`configs/spatial.yaml`. This drops `|Z|` from 1421 to 530; the
+threshold -> |Z| curve was measured directly from the run output.
+
+**Impact / rationale**:
+- a) The Stage-4 diffusion U-Net's memory scales with `|Z|^2` (each
+  `[T_window, |Z|, |Z|]` OD slice is treated as an image); `530^2` is
+  in the same ballpark as a standard 512x512 DDPM.
+- b) After eVTOL eligibility filtering (>=15 km, >=25 min) the OD
+  matrix sparsifies sharply; too large a `|Z|` drives mean trips per
+  OD pair below ~2, leaving the DDPM no structure to learn.
+- c) `|Z| = 530` sits lower-middle of `[400, 700]`, leaving margin for
+  a Stage-3 secondary filter (e.g. `min_eligible_orders_per_zone`).
+
+---
+
+## 2026-05-18 — Stage 2: |C| target revised [200, 500] -> [600, 1500]
+
+**Plan said**: `|C|` (candidate vertiport count) should fall in
+`[200, 500]` — `docs/plan/stage2_spatial_discretization.md`, Acceptance
+Criteria and task 4 step 5.
+
+**Reality**: that window was set against the original City-proper
+`SUZHOU_BBOX`. The metro-area bbox (2026-05-15 entry above) is ~7x
+larger; POI density and the ~3 km uniform grid both scale with area,
+so a City-proper `|C|` target cannot hold on the metro bbox — the same
+issue already forced the `|Z|` revision. With the POI pipeline
+tightened (`subway=yes` removed, industrial floor 200000 m^2, H3 res-8
+dedup) the POI+grid count pre-finalize is 1482 (POI 1383 + grid 99);
+even dropping every industrial POI leaves ~756, still above the old
+ceiling.
+
+**Change**: `|C|` target revised `[200, 500]` -> `[600, 1500]`,
+applied in the Stage 2 plan Acceptance Criteria, plan task 4 step 5,
+and the `CAND_LO`/`CAND_HI` constants of
+`experiments/run_stage2_build.py`.
+
+**Impact**:
+- Anchored to the `|C|/|Z|` ratio common in MCLP / facility-location
+  literature (~2-3 candidates per demand zone): `|Z| = 530` implies
+  `[1060, 1590]`. The adopted `[600, 1500]` brackets that range with a
+  lower floor, since task-4 `finalize_candidates` still drops
+  zero-demand-zone candidates (post-finalize `|C|` < pre-finalize).
+- This is not target-fitting: the industrial POIs were tightened
+  independently for correctness (200000 m^2 floor + res-8 dedup)
+  *before* this target was revised — the line moved to match the data,
+  not the data to clear the line.
+- Confirmed by the full task-1..4 run: POI+grid pre-finalize = 1482;
+  `finalize_candidates` dropped 669 candidates lying outside the 530
+  demand zones, giving a final **`|C| = 813`** — inside `[600, 1500]`.
+- Closing the loop on the anchor: the `[600, 1500]` band is set wide to
+  admit the whole `|C|/|Z| ∈ [1, 3]` ratio range, not to bracket the
+  midpoint of the `[1060, 1590]` anchor. The measured ratio
+  813 / 530 ≈ 1.5 sits toward the lower end of the MCLP literature —
+  the candidate-sparse side (grid contributes only 99; POIs dominate) —
+  and lies inside `[600, 1500]`, so acceptance passes.

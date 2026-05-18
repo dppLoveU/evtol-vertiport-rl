@@ -1,0 +1,43 @@
+# Stage-2 spatial discretization config.
+# Loaded by experiments/run_stage2_build.py (PyYAML; Hydra wiring is a
+# future task — see docs/decisions.md 2026-05-14). The keys here are the
+# source of truth; code reads them and never hardcodes values.
+
+seed: 42
+
+input:
+  orders_path: data/processed/orders_clean.parquet
+
+zones:
+  h3_resolution: 7
+  min_orders_per_zone: 2000        # endpoint-count threshold; see docs/decisions.md 2026-05-18
+  output_path: data/processed/zones.geojson
+
+candidates:
+  output_path: data/processed/candidates.geojson
+  poi:
+    # Cache the classified+filtered POI download so reruns do not re-hit
+    # the OSM API (see stage2 plan Common Pitfalls). The H3 dedup runs
+    # after the cache read, so the cache stays the pre-dedup set.
+    cache_path: data/raw/osm_poi_suzhou.geojson
+    hospital_min_area_m2: 10000    # drop hospital polygons below this
+    industrial_min_area_m2: 200000 # drop industrial polygons below this (>20 ha)
+    dedupe_h3_res: 8               # keep 1 POI per H3 res-8 cell; null disables
+    tags:
+      railway: [station, halt]
+      station: [subway]
+      shop: [mall]
+      aeroway: [aerodrome]
+      amenity: [hospital]
+      landuse: [industrial]
+  grid:
+    spacing_deg: 0.03              # ~3 km uniform grid
+    min_separation_km: 1.0         # drop grid points this close to a POI
+
+matrices:
+  walk_radius_km: 5.0
+  dist_zone_zone_path: data/processed/dist_zone_zone.npy
+  dist_zone_cand_path: data/processed/dist_zone_cand.npy
+  cand_covers_zones_path: data/processed/cand_covers_zones.npy
+
+meta_path: data/processed/spatial_meta.json
