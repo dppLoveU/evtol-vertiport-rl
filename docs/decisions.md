@@ -424,3 +424,100 @@ switch to 12 km and regenerate the OD tensors.
 threshold-based proxy / baseline definition / sensitivity-tested
 assumption — never as the single ground-truth definition of
 low-altitude mobility demand.
+
+---
+
+## 2026-05-19 — Stage 4A: padding to a multiple of 16, not the next pow2
+
+**Plan said**: `docs/plan/stage4_diffusion.md` Padding section
+originally said zero-pad `|Z|` to the next power of 2 ("e.g., 256").
+
+**Reality**: with `|Z| = 530` the next power of 2 is **1024**. A U-Net
+only needs each spatial dim divisible by `2^depth` (the down-sampling
+depth), not a full power of 2. Padding 530 → 1024 inflates the spatial
+area by `1024²/530² ≈ 3.7×` and makes even a small U-Net costly;
+padding 530 → **544** (next multiple of 16, depth-4 friendly) costs only
+`544²/530² ≈ 1.05×`.
+
+**Change** (directed by the user in the Stage-4A brief): pad to the next
+multiple of `pad_multiple` (default 16) → `pad_size = 544`. `pad_size`
+is auto-computed by `src/data/od_dataset.py::next_pad_size`;
+`pad_multiple` lives in `configs/diffusion.yaml::data`. The plan Padding
+section and Architecture section were updated to match.
+
+**Impact**: lighter U-Net inputs; `1024` remains available by setting
+`pad_multiple` to 1024 if a deeper net is ever wanted.
+
+---
+
+## 2026-05-19 — Stage 4A: norm stats stored as JSON, not .pt
+
+**Plan said**: save `mu` / `sigma` to `models/diffusion_od/norm_stats.pt`.
+
+**Change**: the norm stats are three scalars (`mu`, `sigma`, `clip_val`);
+Stage 4A is pure NumPy and has no torch dependency yet (torch is added
+in Stage 4B). They are written as JSON to
+`data/processed/od_norm_stats.json` (`norm_stats_path` in
+`configs/diffusion.yaml`). No information is lost.
+
+**Impact**: none functional. Stage 4B may re-home the file under
+`models/diffusion_od/` if desired; the path is config-driven.
+
+---
+
+## 2026-05-19 — Stage 4A: train/val/test split is 9/1/1 days
+
+**Plan said**: split "first 5 days train, day 6 val, day 7 test" — drawn
+against the original 7-day / T=336 window.
+
+**Reality**: the window is now 11 full days (T=528, 48 slots/day; see the
+2026-05-18 time-window entry). The split was redesigned for 11 days:
+**train days 0–8 (slots 0–431), val day 9 (432–479), test day 10
+(480–527)** — contiguous-day so val/test slots are held out of training
+(no temporal leak). Configurable in `configs/diffusion.yaml::data.split`.
+
+**Caveat**: days 0–10 of the window are Mon–Thu (2023-07-10 is a
+Monday), so val (day 9 = Wed) and test (day 10 = Thu) are both weekdays
+— no weekend slot lands in val/test. The single weekend in the window
+(days 5–6) sits inside the train split. If weekend generalization needs
+explicit evaluation in Stage 4B, revisit the split (e.g. interleave by
+day-of-week) — flagged, not yet decided.
+
+---
+
+## 2026-05-19 — Stage 4A FINDING: log1p+standardize+clip degenerates on the sparse eVTOL tensor
+
+**Not a deviation — a finding from the Stage-4A smoke that needs a
+Stage-4B decision before training.**
+
+The plan's normalization (`log1p` → standardize with global scalar
+`mu`/`sigma` → clip to `[-3,3]` → scale to `[-1,1]`) was implemented
+faithfully. Run on the real `od_evtol.npy` (nonzero_ratio **0.117%**)
+the train-split stats come out **`mu = 0.00104`, `sigma = 0.02787`** —
+both tiny, because ~99.88% of entries are zero so `log1p(0)=0`
+dominates.
+
+Consequence: a single eVTOL trip (`count = 1` → `log1p = 0.693`)
+standardizes to `(0.693 − 0.001)/0.0279 ≈ 24.8`, far past the clip at 3.
+**Every nonzero OD entry saturates to `+1.0`; every zero sits at
+`≈ −0.0124`.** The normalized tensor is effectively binary. The
+inverse transform therefore cannot distinguish `count=1` from
+`count=100` (smoke round-trip `max|recovered−raw| ≈ 3.9`).
+
+This is exactly the plan's "Mode collapse to zeros" pitfall, made
+concrete by the data. Options for Stage 4B (NOT yet chosen — ask the
+user):
+
+1. **Per-pixel or quantile normalization** instead of one global
+   scalar — but with 0.117% density most pixels are all-zero.
+2. **Drop the clip / raise `clip_val`** so the dynamic range survives —
+   the clip is what destroys it; `clip_val` is already config-driven.
+3. **Standardize over nonzero entries only**, treating zeros separately
+   (e.g. a zero/nonzero mask channel + magnitude channel).
+4. **Switch to the 12 km eVTOL fallback** (7.98% share, denser tensor —
+   see the 2026-05-18 threshold entry); a denser tensor makes the
+   normalization far less degenerate.
+
+Recorded here so Stage 4B starts from this finding rather than
+rediscovering it. Stage 4A itself (dataset / padding / inverse-transform
+plumbing) is correct and complete.

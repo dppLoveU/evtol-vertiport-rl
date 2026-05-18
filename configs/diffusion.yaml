@@ -1,0 +1,87 @@
+# Stage-4 diffusion model config.
+# Loaded by experiments/run_stage4_*.py (PyYAML; Hydra wiring is a future
+# task -- see docs/decisions.md 2026-05-14). The keys here are the source
+# of truth; code reads them and never hardcodes values.
+#
+# Stage 4A consumes only the `input` and `data` sections (ODDataset,
+# normalization, padding). The `model` / `train` / `sample` sections are
+# written ahead as the single source of truth for Stage 4B+; their values
+# are deliberately small SMOKE defaults, NOT final hyperparameters.
+
+seed: 42
+
+input:
+  # Stage-3 outputs. od_evtol.npy is [528, 530, 530] int32, 593 MB --
+  # read via np.load(mmap_mode="r"), never fully resident.
+  od_path: data/processed/od_evtol.npy
+  meta_path: data/processed/od_meta.json
+
+data:
+  # One training sample is a window of `window` consecutive time slots,
+  # giving a [window, |Z|, |Z|] multi-channel image. Default 1.
+  window: 1
+
+  # Padding: |Z| = 530 is not divisible by 2^depth, which a U-Net needs.
+  # pad_size is computed automatically: ceil(|Z| / pad_multiple) *
+  # pad_multiple. pad_multiple = 16 -> pad_size = 544 (depth-4 friendly,
+  # only ~5% area overhead). The next power of 2 (1024) is the heavy
+  # option and is NOT used by default -- see docs/plan/stage4_diffusion.md
+  # Padding and docs/decisions.md 2026-05-18.
+  pad_multiple: 16
+
+  # log1p normalization. Pipeline (see src/data/od_dataset.py):
+  #   1. log1p(count)
+  #   2. standardize with global scalar mu/sigma over the TRAIN split
+  #   3. clip to [-clip_val, +clip_val]
+  #   4. scale to [-1, 1]  (divide by clip_val)
+  # mu/sigma are computed from the train split on first build and cached
+  # to norm_stats_path; val/test load the cached stats. JSON (3 scalars),
+  # not .pt -- Stage 4A has no torch dependency.
+  clip_val: 3.0
+  norm_stats_path: data/processed/od_norm_stats.json
+
+  # Train/val/test split over the 11-day window. T = 528 slots, 48 per
+  # day. Contiguous-day split so val/test slots are held out of training
+  # (no temporal leak). Ranges are [start_day, end_day) day indices;
+  # day d covers slots [d*48, (d+1)*48).
+  split:
+    train_days: [0, 9]    # days 0..8  -> slots 0..431   (9 days, 432 slots)
+    val_days:   [9, 10]   # day 9      -> slots 432..479 (1 day,   48 slots)
+    test_days:  [10, 11]  # day 10     -> slots 480..527 (1 day,   48 slots)
+
+model:
+  # SMOKE defaults -- a small model only to validate that forward +
+  # sampling run end-to-end. NOT final. Scale up (base_channels -> 64,
+  # channel_mults -> [1,2,4,8]) only after the smoke run is clean.
+  base_channels: 16
+  channel_mults: [1, 2, 4]
+  num_res_blocks: 1
+  time_emb_dim: 128
+  cond_dropout_prob: 0.1        # classifier-free guidance condition drop
+
+diffusion:
+  num_train_timesteps: 1000
+  beta_schedule: cosine
+  num_inference_steps: 50       # DDIM
+  guidance_scale: 2.0
+
+train:
+  # SMOKE defaults -- batch_size 1 and 10 steps just exercise the loop.
+  batch_size: 1
+  steps: 10
+  lr: 2.0e-4
+  weight_decay: 0.0
+  grad_clip: 1.0
+  ema_decay: 0.9999
+  amp: true
+  eval_every: 5
+  ckpt_dir: results/stage4/smoke/ckpt
+
+sample:
+  n_omega: 64                                            # samples per time slot
+  od_samples_path: data/synthetic/od_samples.npy         # [N_w, 528, 530, 530] int16 (~19 GB)
+  od_samples_agg_path: data/synthetic/od_samples_agg.npy  # [N_w, 530, 530] int32, Stage-5 input
+
+logging:
+  backend: tb                   # "wandb" or "tb"
+  project: evtol-vertiport
