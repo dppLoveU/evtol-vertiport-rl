@@ -132,3 +132,34 @@ Wuxi, Jiaxing).
   metropolitan area eVTOL" — consistent with the inter-county-city
   trip data and a more realistic operational scope for vertiport
   siting.
+
+---
+
+## 2026-05-18 — Stage 2: |Z| and |C| expectations revised after metro bbox
+
+**Plan said**: `docs/plan/stage2_spatial_discretization.md` Acceptance
+Criteria required `|Z|` in `[150, 350]`; CLAUDE.md §8 noted "~250
+hexagons for Suzhou". Both figures were drafted against the original
+City-proper `SUZHOU_BBOX`.
+
+**Reality**: the 2026-05-15 bbox expansion (entry above) enlarged the
+envelope ~7× to `lon[120.37, 121.33], lat[30.88, 32.01]` — area ≈
+11,450 km². At H3 resolution 7 (~5.16 km² per cell) the bbox holds an
+upper bound of ~2,220 cells. The Suzhou metro built-up area (City
+proper ~500 km² plus Kunshan / Changshu / Zhangjiagang / Taicang and
+the connecting industrial belt) is on the order of 2,500–4,000 km²,
+which after the `min_orders_per_zone` ghost-cell filter corresponds to
+roughly 480–770 demand zones. The old "~250" estimate is stale by the
+same ~7× factor as the bbox.
+
+**Change**: revised expectations to **|Z| ≈ 400–700**. Acceptance
+criterion updated to `|Z|` in `[350, 800]`; CLAUDE.md §8 updated to
+"~400-700 hexagons for the metro bbox"; a note added to the Stage 2
+Common Pitfalls section pointing back here. `|C|` target window
+`[200, 500]` is left unchanged for now — POI density and the 3 km grid
+spacing are independent of the zone count — but it may need a similar
+revision once the actual grid-seed count over the larger bbox is known.
+
+**Impact**: no code change. If a Stage 2 run produces `|Z|` outside
+`[350, 800]`, treat `min_orders_per_zone` as the lever but consult the
+user before changing it (CLAUDE.md §6 rule 5).

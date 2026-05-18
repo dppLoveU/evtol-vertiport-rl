@@ -112,7 +112,7 @@ matrix, zone-to-zone distance matrix) needed by Stages 3, 5, 6.
 
 ## Acceptance Criteria
 
-- [ ] `|Z|` falls in `[150, 350]`. If outside, investigate.
+- [ ] `|Z|` falls in `[350, 800]`. If outside, investigate.
 - [ ] `|C|` falls in `[200, 500]`.
 - [ ] Every zone has at least one candidate (or is explicitly logged
   as "uncovered by design").
@@ -158,6 +158,11 @@ matrix, zone-to-zone distance matrix) needed by Stages 3, 5, 6.
 - **Walk radius semantics**: we model "walk to vertiport" as straight-
   line haversine. This is an approximation; real walking distance is
   1.2–1.4× longer. Note this limitation in the paper.
+- **bbox expanded since this plan was drafted**: `SUZHOU_BBOX` was
+  widened to the full metropolitan area at the end of Stage 1 (~7×
+  the original City-proper area). The `|Z|` / `|C|` capacity estimates
+  here have been updated accordingly — see `docs/decisions.md`
+  2026-05-18.
 
 ## Dependencies
 

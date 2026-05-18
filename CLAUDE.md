@@ -179,8 +179,9 @@ For the full rationale, see `docs/decisions.md`. Headline choices:
 
 - **OD matrix, not grid density**. Vertiports serve OD pairs; origin
   density alone cannot identify long enough trips for eVTOL.
-- **Demand zones via H3 level 7**. Cleaner than admin boundaries, ~250
-  hexagons for Suzhou. Edge length ~1.2 km matches walking radius.
+- **Demand zones via H3 level 7**. Cleaner than admin boundaries,
+  ~400-700 hexagons for the metro bbox (revised after stage 1 bbox
+  expansion). Edge length ~1.2 km matches walking radius.
 - **Candidate vertiports via POI + uniform grid hybrid**. Start with
   OSM transit hubs, malls, industrial parks; pad with uniform grid
   centroids to ensure spatial coverage. Target |C| ≈ 300.
