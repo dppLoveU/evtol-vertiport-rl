@@ -133,3 +133,92 @@ def assign_zones(
         "n_unknown_d": int(d_zone.isna().sum()),
     }
     return assigned, dropped, stats
+
+
+def is_evtol_eligible(
+    df: pd.DataFrame,
+    *,
+    min_dist_km: float,
+    min_duration_min: float,
+) -> pd.Series:
+    """Boolean mask of eVTOL-eligible orders.
+
+    An order is eligible iff ALL hold (Stage-3 plan task 4):
+      (a) ``geo_dist_km >= min_dist_km``
+      (b) ``duration_min >= min_duration_min``
+      (c) ``o_zone != d_zone`` -- eVTOL is wasted on intra-zone trips.
+
+    ``df`` must already carry ``o_zone`` / ``d_zone`` (from
+    :func:`assign_zones`).
+    """
+    return (
+        (df["geo_dist_km"] >= min_dist_km)
+        & (df["duration_min"] >= min_duration_min)
+        & (df["o_zone"] != df["d_zone"])
+    )
+
+
+def build_od_tensor(
+    df: pd.DataFrame,
+    *,
+    n_time_bins: int,
+    n_zones: int,
+    value_col: str | None = None,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Aggregate orders into a dense ``[T, |Z|, |Z|]`` OD tensor.
+
+    Groups by ``(slot, o_zone, d_zone)``. With ``value_col=None`` the
+    cell value is the row count (int32 tensor); otherwise it is the sum
+    of ``value_col`` (float32 tensor).
+
+    ``slot`` / ``o_zone`` / ``d_zone`` are range-checked against
+    ``n_time_bins`` / ``n_zones``; an out-of-range or NaN index raises
+    ``ValueError`` rather than silently writing the wrong cell. When
+    ``value_col`` is given it must contain no NaN and no negative values.
+
+    Returns ``(tensor, stats)`` -- ``stats`` carries shape, dtype, sum,
+    nonzero count/ratio and the tensor's memory footprint.
+    """
+    for col, hi in (("slot", n_time_bins), ("o_zone", n_zones), ("d_zone", n_zones)):
+        s = df[col]
+        if s.isna().any():
+            raise ValueError(f"build_od_tensor: column '{col}' contains NaN")
+        if len(s) and not s.between(0, hi - 1).all():
+            raise ValueError(
+                f"build_od_tensor: column '{col}' has values outside [0, {hi})"
+            )
+
+    if value_col is not None:
+        vals = df[value_col]
+        if vals.isna().any():
+            raise ValueError(
+                f"build_od_tensor: value_col '{value_col}' contains NaN"
+            )
+        if (vals < 0).any():
+            raise ValueError(
+                f"build_od_tensor: value_col '{value_col}' has negative values"
+            )
+
+    dtype: type = np.float32 if value_col is not None else np.int32
+    tensor = np.zeros((n_time_bins, n_zones, n_zones), dtype=dtype)
+
+    if len(df):
+        grouped = df.groupby(["slot", "o_zone", "d_zone"], sort=False)
+        agg = grouped.size() if value_col is None else grouped[value_col].sum()
+        idx = agg.index
+        s_arr = idx.get_level_values("slot").to_numpy()
+        o_arr = idx.get_level_values("o_zone").to_numpy()
+        d_arr = idx.get_level_values("d_zone").to_numpy()
+        tensor[s_arr, o_arr, d_arr] = agg.to_numpy().astype(dtype)
+
+    nonzero_count = int(np.count_nonzero(tensor))
+    stats: dict[str, object] = {
+        "shape": tuple(tensor.shape),
+        "dtype": str(tensor.dtype),
+        "sum": tensor.sum().item(),
+        "nonzero_count": nonzero_count,
+        "nonzero_ratio": nonzero_count / tensor.size,
+        "n_cells": int(tensor.size),
+        "memory_mb": tensor.nbytes / 1e6,
+    }
+    return tensor, stats
