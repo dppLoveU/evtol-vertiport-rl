@@ -12,6 +12,16 @@ dependencies = [
     # ydata-profiling for the auto-generated HTML summary.
     "matplotlib>=3.7",
     "ydata-profiling>=4.6",
+    # Stage-2 spatial discretization. h3 pinned <4 so the v3 API names
+    # used in the plan (geo_to_h3, h3_to_geo, h3_to_geo_boundary) stay
+    # valid; osmnx for OSM POI pulls; geopandas/shapely for geometry;
+    # folium/branca for the interactive maps (task 6).
+    "h3>=3.7,<4",
+    "osmnx>=2.0",
+    "geopandas>=1.0",
+    "shapely>=2.0",
+    "folium>=0.15",
+    "branca>=0.7",
 ]
 
 [project.optional-dependencies]

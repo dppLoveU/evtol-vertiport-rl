@@ -222,6 +222,9 @@ __marimo__/
 /data/
 /models/
 /wandb/
+/results/
+# osmnx HTTP response cache (auto-created)
+cache/
 *.pyc
 .venv/
 .env

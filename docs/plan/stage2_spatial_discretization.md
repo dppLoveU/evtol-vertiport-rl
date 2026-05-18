@@ -95,8 +95,9 @@ matrix, zone-to-zone distance matrix) needed by Stages 3, 5, 6.
       candidates whose zone has zero demand.
    3. Assign `cand_id` by lexicographic sort.
    4. Save GeoJSON.
-   5. Target `|C|` in `[200, 500]`. If outside this range, log a warning
-      and stop for human review.
+   5. Target `|C|` in `[600, 1500]` (revised — see `docs/decisions.md`
+      2026-05-18). If outside this range, log a warning and stop for
+      human review.
 
 5. **Build distance and coverage matrices** (`build_matrices`):
    1. `dist_zone_zone[i, j]`: haversine_km between zones `i` and `j`'s
@@ -113,7 +114,8 @@ matrix, zone-to-zone distance matrix) needed by Stages 3, 5, 6.
 ## Acceptance Criteria
 
 - [ ] `|Z|` falls in `[350, 800]`. If outside, investigate.
-- [ ] `|C|` falls in `[200, 500]`.
+- [ ] `|C|` falls in `[600, 1500]` (revised from [200, 500] after the
+  metro bbox expansion — see `docs/decisions.md` 2026-05-18).
 - [ ] Every zone has at least one candidate (or is explicitly logged
   as "uncovered by design").
 - [ ] `dist_zone_zone` is symmetric (`np.allclose(D, D.T)`) and has
