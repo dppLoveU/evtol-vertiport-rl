@@ -41,3 +41,6 @@ matrices:
   cand_covers_zones_path: data/processed/cand_covers_zones.npy
 
 meta_path: data/processed/spatial_meta.json
+
+maps:
+  output_dir: results/stage2/maps   # folium HTML maps (task 6); results/ is gitignored
