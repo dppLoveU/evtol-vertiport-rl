@@ -183,9 +183,16 @@ class UNetOD(nn.Module):
         hour: torch.Tensor,
         dow: torch.Tensor,
         is_weekend: torch.Tensor,
+        cond_drop_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         te = self.time_mlp(sinusoidal_embedding(t, self.time_emb_dim))
         ce = self.cond_mlp(hour, dow, is_weekend)
+        if cond_drop_mask is not None:
+            # Zero the conditional embedding for samples where the mask is
+            # True. The fused embedding for those samples is therefore
+            # ``emb_fuse([te, 0])`` -- the model's "unconditional" branch.
+            keep = (~cond_drop_mask).to(ce.dtype).unsqueeze(-1)
+            ce = ce * keep
         return self.emb_fuse(torch.cat([te, ce], dim=-1))
 
     def forward(
@@ -195,15 +202,21 @@ class UNetOD(nn.Module):
         hour: torch.Tensor,
         dow: torch.Tensor,
         is_weekend: torch.Tensor,
+        cond_drop_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Predict noise epsilon for the diffusion training objective.
 
         Shapes:
           * ``x``: ``[B, in_channels, H, W]`` (e.g. ``[B, 1, 544, 544]``)
           * ``t``, ``hour``, ``dow``, ``is_weekend``: ``[B]`` long tensors.
+          * ``cond_drop_mask``: optional ``[B]`` bool tensor. ``True`` means
+            "drop the conditional embedding for this sample" -- the
+            classifier-free-guidance unconditional branch. ``None`` (the
+            default) keeps the original Stage 4B-1 / 4B-2 behaviour
+            unchanged.
           * returns: same shape as ``x``.
         """
-        emb = self._fuse_embeddings(t, hour, dow, is_weekend)
+        emb = self._fuse_embeddings(t, hour, dow, is_weekend, cond_drop_mask)
 
         h = self.input_conv(x)
         skips: list[torch.Tensor] = []

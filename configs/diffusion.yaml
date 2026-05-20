@@ -7,6 +7,23 @@
 # normalization, padding). The `model` / `train` / `sample` sections are
 # written ahead as the single source of truth for Stage 4B+; their values
 # are deliberately small SMOKE defaults, NOT final hyperparameters.
+#
+# -----------------------------------------------------------------------------
+# Stage 4B-3 training profiles (selected via `--profile` on
+# `experiments/run_stage4_train.py`; PROFILES table in that file).
+#
+#  profile  max_steps  base  channel_mults    bs  ema_decay   wall-time
+#  pilot      1,000     32   (1, 2, 4)        4   0.999       ~10-20 min
+#  medium     5,000     64   (1, 2, 4, 8)     2   0.999       ~1-2 hr
+#  full      20,000     64   (1, 2, 4, 8)     2   0.9999      ~12 hr (budget)
+#
+# Each profile OVERRIDES `train.batch_size`, `train.steps`,
+# `train.ema_decay`, `train.eval_every`, `model.base_channels`, and
+# `model.channel_mults`. The values left in this YAML below remain the
+# SMOKE defaults consumed by `run_stage4_train_smoke.py` /
+# `run_stage4_model_smoke.py` -- do NOT change them to production values
+# without updating those scripts too.
+# -----------------------------------------------------------------------------
 
 seed: 42
 

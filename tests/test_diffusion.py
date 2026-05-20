@@ -184,6 +184,67 @@ def test_summary_keys() -> None:
     assert set(s) >= {"num_train_timesteps", "beta_min", "beta_max", "alpha_cumprod_T"}
 
 
+# --- classifier-free guidance (Stage 4B-3) --------------------------------
+
+
+def test_unet_forward_with_cond_drop_mask(unet: UNetOD, cond: tuple) -> None:
+    """Dropping the condition should change the model output."""
+    x = torch.randn(B, C, H, W)
+    t = torch.tensor([0, 50], dtype=torch.long)
+    drop_all = torch.tensor([True, True])
+    out_cond = unet(x, t, *cond)
+    out_uncond = unet(x, t, *cond, cond_drop_mask=drop_all)
+    assert out_uncond.shape == out_cond.shape
+    assert torch.isfinite(out_uncond).all()
+    # The cond MLP starts from non-zero init weights; zeroing its output
+    # must propagate to a different forward.
+    assert not torch.allclose(out_cond, out_uncond, atol=1e-6)
+
+
+def test_unet_per_sample_cond_dropout(unet: UNetOD, cond: tuple) -> None:
+    """A per-sample mask leaves un-masked samples bit-equal to no-mask."""
+    x = torch.randn(B, C, H, W)
+    t = torch.tensor([0, 50], dtype=torch.long)
+    # Sample 0 keeps cond; sample 1 drops it.
+    mask = torch.tensor([False, True])
+    out_mixed = unet(x, t, *cond, cond_drop_mask=mask)
+    out_no_mask = unet(x, t, *cond)
+    # Sample 0 should match the no-mask path; sample 1 should not.
+    assert torch.allclose(out_mixed[0], out_no_mask[0], atol=1e-6)
+    assert not torch.allclose(out_mixed[1], out_no_mask[1], atol=1e-6)
+
+
+def test_training_loss_full_cond_dropout_runs(unet: UNetOD, cond: tuple) -> None:
+    diff = GaussianDiffusion(num_train_timesteps=100)
+    x0 = torch.randn(B, C, H, W)
+    t = torch.tensor([10, 50], dtype=torch.long)
+    loss = diff.training_loss(unet, x0, *cond, t=t, cond_dropout_prob=1.0)
+    assert loss.ndim == 0
+    assert torch.isfinite(loss)
+    loss.backward()
+
+
+def test_ddim_sample_with_guidance_shape(unet: UNetOD, cond: tuple) -> None:
+    diff = GaussianDiffusion(num_train_timesteps=100)
+    out = diff.ddim_sample(
+        unet, (B, C, H, W), *cond, num_inference_steps=5, guidance_scale=2.0
+    )
+    assert out.shape == (B, C, H, W)
+    assert torch.isfinite(out).all()
+
+
+def test_ddim_sample_guidance_one_matches_no_arg(unet: UNetOD, cond: tuple) -> None:
+    """guidance_scale=1.0 must be bit-equal to the no-guidance default path."""
+    diff = GaussianDiffusion(num_train_timesteps=100)
+    torch.manual_seed(0)
+    out_default = diff.ddim_sample(unet, (B, C, H, W), *cond, num_inference_steps=5)
+    torch.manual_seed(0)
+    out_g1 = diff.ddim_sample(
+        unet, (B, C, H, W), *cond, num_inference_steps=5, guidance_scale=1.0
+    )
+    assert torch.equal(out_default, out_g1)
+
+
 # --- checkpoint round-trip (Stage 4B-2 smoke) -----------------------------
 
 

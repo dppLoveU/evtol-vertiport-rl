@@ -91,15 +91,27 @@ class GaussianDiffusion(nn.Module):
         dow: torch.Tensor,
         is_weekend: torch.Tensor,
         t: torch.Tensor | None = None,
+        cond_dropout_prob: float = 0.0,
     ) -> torch.Tensor:
-        """Standard MSE-on-epsilon DDPM loss."""
+        """Standard MSE-on-epsilon DDPM loss.
+
+        When ``cond_dropout_prob > 0`` each batch element independently
+        has its conditional embedding dropped with that probability --
+        the classifier-free-guidance training-side trick (Ho & Salimans
+        2022). The model thus learns both conditional and unconditional
+        noise estimates from a single set of weights. The default ``0.0``
+        keeps the original Stage 4B-1/4B-2 behaviour.
+        """
         b = x0.shape[0]
         if t is None:
             t = torch.randint(
                 0, self.num_train_timesteps, (b,), device=x0.device, dtype=torch.long
             )
         x_t, noise = self.add_noise(x0, t)
-        pred = model(x_t, t, hour, dow, is_weekend)
+        cond_drop_mask: torch.Tensor | None = None
+        if cond_dropout_prob > 0.0:
+            cond_drop_mask = torch.rand(b, device=x0.device) < cond_dropout_prob
+        pred = model(x_t, t, hour, dow, is_weekend, cond_drop_mask=cond_drop_mask)
         return F.mse_loss(pred, noise)
 
     # --- sampling ---
@@ -115,6 +127,7 @@ class GaussianDiffusion(nn.Module):
         num_inference_steps: int = 10,
         eta: float = 0.0,
         clip_sample: bool = True,
+        guidance_scale: float = 1.0,
     ) -> torch.Tensor:
         """Deterministic DDIM sampler (``eta=0``) by default.
 
@@ -131,6 +144,16 @@ class GaussianDiffusion(nn.Module):
         with the data prior; without it an untrained model can blow up
         through ``1/sqrt(alpha_cumprod_T) ~ 2000`` before downstream
         ``expm1`` overflows.
+
+        ``guidance_scale`` selects classifier-free-guidance behaviour:
+
+          * ``1.0`` (default) -- one conditional forward per step, exact
+            same code path as before CFG was added; deterministic to the
+            bit given a fixed seed.
+          * ``> 1.0`` -- two forwards per step, a conditional one and an
+            unconditional one (``cond_drop_mask`` all True); the noise
+            estimates are combined as
+            ``eps_uncond + scale * (eps_cond - eps_uncond)``.
         """
         if num_inference_steps < 1 or num_inference_steps > self.num_train_timesteps:
             raise ValueError(
@@ -148,9 +171,21 @@ class GaussianDiffusion(nn.Module):
         t_prevs = ts_full[:-1].flip(0)
 
         x = torch.randn(shape, device=device)
+        # Pre-build the uncond mask once; only used when guidance_scale != 1.
+        uncond_mask = (
+            torch.ones(shape[0], device=device, dtype=torch.bool)
+            if guidance_scale != 1.0
+            else None
+        )
         for t_cur, t_prev in zip(t_curs, t_prevs):
             t_batch = torch.full((shape[0],), int(t_cur.item()), device=device, dtype=torch.long)
-            eps_pred = model(x, t_batch, hour, dow, is_weekend)
+            if guidance_scale == 1.0:
+                # No CFG: single conditional forward (bit-equal to pre-CFG path).
+                eps_pred = model(x, t_batch, hour, dow, is_weekend)
+            else:
+                eps_cond = model(x, t_batch, hour, dow, is_weekend)
+                eps_uncond = model(x, t_batch, hour, dow, is_weekend, cond_drop_mask=uncond_mask)
+                eps_pred = eps_uncond + guidance_scale * (eps_cond - eps_uncond)
 
             acp_t = self.alphas_cumprod[t_cur]
             acp_prev = self.alphas_cumprod[t_prev] if int(t_prev.item()) >= 0 else torch.tensor(
