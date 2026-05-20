@@ -61,14 +61,17 @@ data:
   clip_val: 100.0
   norm_stats_path: data/processed/od_norm_stats.json
 
-  # Train/val/test split over the 11-day window. T = 528 slots, 48 per
-  # day. Contiguous-day split so val/test slots are held out of training
-  # (no temporal leak). Ranges are [start_day, end_day) day indices;
-  # day d covers slots [d*48, (d+1)*48).
+  # Train/val/test split. T = 528 slots, 48 per day. The Stage-3 OD
+  # tensor only carries valid eVTOL signal on days 0-6 (day 7 has 40
+  # nonzeros and is treated as a tail; days 8-10 are empty -- see
+  # docs/decisions.md 2026-05-20 "Stage 4 split revision"). Contiguous-day
+  # split so val/test slots are held out of training (no temporal leak).
+  # Ranges are [start_day, end_day) day indices; day d covers slots
+  # [d*48, (d+1)*48).
   split:
-    train_days: [0, 9]    # days 0..8  -> slots 0..431   (9 days, 432 slots)
-    val_days:   [9, 10]   # day 9      -> slots 432..479 (1 day,   48 slots)
-    test_days:  [10, 11]  # day 10     -> slots 480..527 (1 day,   48 slots)
+    train_days: [0, 5]    # Mon..Fri   -> slots 0..239   (5 days, 240 slots)
+    val_days:   [5, 6]    # Sat        -> slots 240..287 (1 day,   48 slots)
+    test_days:  [6, 7]    # Sun        -> slots 288..335 (1 day,   48 slots)
 
 model:
   # SMOKE defaults -- a small model only to validate that forward +

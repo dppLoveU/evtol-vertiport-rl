@@ -248,12 +248,18 @@ def _evaluate(
 
 
 def _collect_real_val_counts(val_base: ODDataset) -> np.ndarray:
-    """Inverse-transform every val slice back to count space (one-time, CPU)."""
+    """Read raw integer OD slices for the val split (one-time, CPU).
+
+    Returns int64 counts of shape ``[N_val, Z, Z]``. We read the raw OD
+    tensor directly rather than inverse-transforming a normalized sample,
+    because the forward normalization passes through float32 and the
+    inverse round-trip introduces ~1e-9 floating-point noise that would
+    make ``np.count_nonzero`` flag every entry as "nonzero".
+    """
     counts_list: list[np.ndarray] = []
-    for i in range(len(val_base)):
-        x_np, _ = val_base[i]
-        counts = val_base.inverse_transform(x_np)  # [W, Z, Z]
-        counts_list.append(counts[0])  # window=1
+    for start in val_base._starts:
+        sl = np.asarray(val_base._od[start : start + val_base.window], dtype=np.int64)
+        counts_list.append(sl[0])  # window=1
     return np.stack(counts_list)  # [N_val, Z, Z]
 
 
@@ -275,8 +281,12 @@ def _sample_diag(
 ) -> tuple[dict[str, float], np.ndarray]:
     """Generate ``n_samples`` slices with EMA weights and compare marginals.
 
-    Returns ``(metrics_dict, gen_counts)``. ``gen_counts`` has shape
-    ``[n_samples, Z, Z]`` in count space (after ``inverse_transform``).
+    Returns ``(metrics_dict, gen_counts)``. ``gen_counts`` is the
+    continuous ``[n_samples, Z, Z]`` float array after
+    ``inverse_transform``. Acceptance metrics in ``metrics_dict``
+    (``gen_nonzero_ratio``, row/col KS, etc.) are computed on the
+    rounded integer counts ``np.rint(max(gen, 0)).astype(int64)``;
+    continuous-side stats are exposed via the ``gen_cont_*`` keys.
     """
     # Collect ``n_samples`` conditions from the val loader (repeating if needed).
     hours: list[int] = []
@@ -319,8 +329,17 @@ def _sample_diag(
         ema.restore(model)
         model.train()
 
-    gen_counts = np.stack(gen_chunks)  # [n_samples, Z, Z]
-    metrics = marginal_compare(real_val_counts, gen_counts)
+    gen_counts = np.stack(gen_chunks)  # [n_samples, Z, Z] continuous floats
+    gen_round = np.rint(np.maximum(gen_counts, 0.0)).astype(np.int64)
+    # Acceptance metrics are on rounded integer counts (matching the real
+    # int OD tensor); continuous-side stats are kept for debug.
+    metrics = marginal_compare(real_val_counts, gen_round)
+    metrics["gen_cont_nonzero_ratio"] = float(
+        np.count_nonzero(gen_counts)
+    ) / float(gen_counts.size)
+    metrics["gen_cont_min"] = float(gen_counts.min())
+    metrics["gen_cont_max"] = float(gen_counts.max())
+    metrics["gen_cont_mean"] = float(gen_counts.mean())
     return metrics, gen_counts
 
 
@@ -663,8 +682,9 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     _plot_loss_curve(log_path, out_dir / "loss_curve.png")
     if final_gen_counts is not None:
+        final_gen_round = np.rint(np.maximum(final_gen_counts, 0.0)).astype(np.int64)
         _plot_sample_grid(real_val_counts, final_gen_counts, out_dir / "sample_grid.png")
-        _plot_marginal_match(real_val_counts, final_gen_counts, out_dir / "marginal_match.png")
+        _plot_marginal_match(real_val_counts, final_gen_round, out_dir / "marginal_match.png")
 
     metrics = {
         "profile": profile_name,

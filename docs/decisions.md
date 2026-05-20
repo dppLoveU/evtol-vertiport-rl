@@ -644,3 +644,158 @@ the difference between a finite inverse-transform output and a
 
 **Status**: in code, on by default. Recorded here so future Stage 4B+
 ablations can audit it; not gated on user sign-off.
+
+---
+
+## 2026-05-20 — Stage 4 split revision: 5/1/1 days (Mon–Fri / Sat / Sun)
+
+**Plan / prior decision said**: split `train_days [0,9] / val_days [9,10] /
+test_days [10,11]` (see 2026-05-19 entry above), assuming the 11-day OD
+tensor carried signal across all 11 days.
+
+**Reality** (surfaced by the Stage 4B-3 pilot post-hoc diagnostic, see
+`results/stage4/train_pilot/diagnostics_posthoc.json`):
+direct nonzero-count inspection of `data/processed/od_evtol.npy`
+(`[528, 530, 530]` int32) shows the eVTOL OD signal is concentrated on
+days 0–6 only.
+
+```
+day   slots             nonzero    sum     max
+  0   [  0,  48)         24 733   26 791    8
+  1   [ 48,  96)         25 944   28 200    8
+  2   [ 96, 144)         25 268   27 422    9
+  3   [144, 192)         25 313   27 420   10
+  4   [192, 240)         26 627   29 283    8
+  5   [240, 288)         23 313   25 365    6   ← Sat
+  6   [288, 336)         22 026   24 177    6   ← Sun
+  7   [336, 384)             40       41    2   ← tail only
+  8   [384, 432)              0        0    0
+  9   [432, 480)              0        0    0   ← old val (EMPTY)
+ 10   [480, 528)              0        0    0   ← old test (EMPTY)
+```
+
+Day 7 is a residual tail (40 nonzeros total); days 8–10 are completely
+empty. The "data spans 12.45 days" finding from 2026-05-18 referred to
+the raw order timestamp range, not the OD-tensor occupancy after the
+Stage-3 eVTOL filter + zone assignment. The two are not the same.
+
+**Consequences of the old split**:
+1. **val_loss is meaningless**: val (day 9) is identically zero, so the
+   model only needs to denoise back to the constant zero slice. The
+   Stage 4B-3 pilot's `val_loss_ema 0.77 → 0.024` reflects this, not
+   genuine generalization.
+2. **Marginal compare is meaningless**: `real_nonzero_ratio` on an
+   all-zero val reference is exactly 0; row/col KS statistics are
+   degenerate and always read 1.0 against any non-zero gen sample.
+3. **Day 8 inside train wastes one ninth of train compute** on a
+   zero target.
+
+**Change**: `configs/diffusion.yaml::data.split` updated to
+
+```
+train_days: [0, 5]    # Mon..Fri   -> slots 0..239   (5 days, 240 slots)
+val_days:   [5, 6]    # Sat        -> slots 240..287 (1 day,   48 slots)
+test_days:  [6, 7]    # Sun        -> slots 288..335 (1 day,   48 slots)
+```
+
+Day 7 (40 nonzeros) is **not** placed in any split — it is treated as a
+tail and dropped from Stage 4 training/eval. Days 8–10 are excluded by
+construction.
+
+**Verification** (run on the new split):
+
+```
+train: 240 slices, 127 885 nonzero, sum 139 116, max 10, ratio 0.1897%
+val  :  48 slices,  23 313 nonzero, sum  25 365, max  6, ratio 0.1729%
+test :  48 slices,  22 026 nonzero, sum  24 177, max  6, ratio 0.1634%
+```
+
+`norm_stats.json` was deleted and re-cached from the new train split:
+`mu = 0.001378, sigma = 0.032088, clip_val = 100.0` (was `mu = 0.001038,
+sigma = 0.027869` under the 9-day train). Train sample inverse round-trip
+`max|err| = 0.0000`. `python -m experiments.run_stage4_dataset_smoke`
+green on the new split.
+
+**Caveat**: val and test are now Saturday and Sunday, both weekend
+days. This swaps the prior caveat — under the 9/1/1 split val/test were
+both weekdays. The Stage-4B-3 conditioning input includes
+`is_weekend ∈ {0,1}`, so the model trains on the weekend pattern
+through cond-dropout (CFG) and is evaluated on weekend-only val/test.
+Cross-pattern generalization (predict weekday from weekend, or vice
+versa) is not measured under the new split — flagged, not yet decided.
+
+**Pilot status**: the 2026-05-20 Stage 4B-3 pilot run (1000 steps,
+`results/stage4/train_pilot/`) is therefore **invalidated as an
+acceptance pilot**. It is retained on disk under a renamed directory
+as a debug artefact for the split / metric口径 investigation only and
+**must not** be cited as the Stage 4B-3 pilot acceptance evidence. A
+fresh pilot run on the new split is required (gated on user sign-off;
+this entry does not itself launch one).
+
+---
+
+## 2026-05-20 — Stage 4B-3 metric口径: acceptance metrics use rounded integer counts
+
+**Background**: the in-loop sample diagnostic
+(`_sample_diag` → `marginal_compare`) and the Stage 4B-3 PR-1 metric
+module (`src/utils/metrics_dist.py`) compute `nonzero_ratio` via
+`np.count_nonzero(arr)` on the OD array passed in. The OD-tensor
+forward pipeline is `int → log1p → float32 standardize/clip → [-1,1]`;
+the inverse `inverse_norm` lifts to float64 and `expm1`s back. The
+round-trip is not bit-exact through float32, so an entry that started
+at exact integer 0 comes back as `~1e-9` rather than `0.0`. As a result
+`real_nonzero_ratio` was reading **1.0** on the val real-reference and
+the gen ratio was reading **~25%** (continuous floats above 0), masking
+the genuine sparsity.
+
+**Change**:
+
+1. `experiments/run_stage4_train.py::_collect_real_val_counts` now reads
+   the raw int64 OD slices directly from the memory-mapped Stage-3
+   tensor (`val_base._od[start : start + window]`) instead of inverse-
+   transforming a normalized sample. The real reference is the original
+   integer count, not a float round-trip.
+2. `experiments/run_stage4_train.py::_sample_diag` rounds the
+   generated continuous counts via
+   `gen_round = np.rint(max(gen, 0)).astype(int64)` and calls
+   `marginal_compare(real_int, gen_round)`. Acceptance metrics
+   (`gen_nonzero_ratio`, row/col mean/std, `row_sum_ks_stat`,
+   `col_sum_ks_stat`, `gen_min/max/mean`) thereby reflect rounded
+   integer counts and are directly comparable to the real OD tensor's
+   sparsity (0.117% over the full tensor; 0.18% over the active
+   days 0–6).
+3. Continuous-side debug stats are retained under explicit
+   `gen_cont_*` keys (`gen_cont_nonzero_ratio`, `gen_cont_min`,
+   `gen_cont_max`, `gen_cont_mean`) so the float-domain behaviour
+   (sample mean, support, peakedness) remains observable.
+4. `_plot_marginal_match` now plots histograms of rounded-count row /
+   column sums for consistency with the metrics; `_plot_sample_grid`
+   keeps the continuous gen array because `log1p` of float gives a
+   smoother heatmap than `log1p` of int.
+5. New auxiliary entry point `experiments/run_stage4_diag_posthoc.py`
+   reproduces the diagnostic offline from a saved checkpoint
+   (`models/diffusion_od_<profile>/best.pt`), reports both continuous
+   and rounded statistics + per-sample summaries, and writes
+   `results/stage4/train_<profile>/diagnostics_posthoc.json`.
+
+**Verification on the 2026-05-20 pilot best.pt (run on the old empty
+split — pre-data-fix; checkpoint reused only as a口径 probe)**:
+
+```
+real_int  nonzero ratio: 0.000% (val was empty under old split)
+gen continuous (>0)    : 25.32%
+gen rounded counts     :  0.0754%   ← acceptance basis
+gen rounded value counts: {0: 4 491 009, 1: 3 383, 2: 8}, max=2
+```
+
+The rounded ratio 0.0754% is in the right order of magnitude for a
+properly sparse OD slice but ~2.4× below the real-data target 0.18% on
+the new split — consistent with a 1000-step pilot under-fitting on a
+9-day train (mostly empty late days). No conclusions are drawn from
+this checkpoint about model quality; the new-split pilot will be the
+first acceptance datapoint.
+
+**Status**: in code, on by default. `src/utils/metrics_dist.py`
+itself is unchanged (the function operates on whatever array is passed
+in; rounding is the caller's responsibility); all 13 `test_metrics_dist`
+tests still pass.
