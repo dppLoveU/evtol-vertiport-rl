@@ -10,6 +10,7 @@ import pytest
 import torch
 
 from src.models.diffusion import GaussianDiffusion, _cosine_betas, _linear_betas
+from src.models.ema import EMA
 from src.models.unet_od import (
     ConditionEmbedding,
     ResBlock,
@@ -181,3 +182,65 @@ def test_summary_keys() -> None:
     diff = GaussianDiffusion(num_train_timesteps=100)
     s = diff.summary()
     assert set(s) >= {"num_train_timesteps", "beta_min", "beta_max", "alpha_cumprod_T"}
+
+
+# --- checkpoint round-trip (Stage 4B-2 smoke) -----------------------------
+
+
+def test_checkpoint_save_load_roundtrip(
+    tmp_path, unet: UNetOD, cond: tuple
+) -> None:
+    """Save (model + EMA + optim + scalars) and reload into fresh instances."""
+    diff = GaussianDiffusion(num_train_timesteps=100)
+    ema = EMA(unet, decay=0.99)
+    optim = torch.optim.AdamW(unet.parameters(), lr=2e-4)
+
+    # One step to populate optimizer state.
+    x = torch.randn(B, C, H, W)
+    loss = diff.training_loss(unet, x, *cond, t=torch.tensor([5, 50], dtype=torch.long))
+    loss.backward()
+    optim.step()
+    ema.update(unet)
+
+    ckpt_path = tmp_path / "ckpt.pt"
+    torch.save(
+        {
+            "model_state_dict": unet.state_dict(),
+            "ema_state_dict": ema.state_dict(),
+            "optimizer_state_dict": optim.state_dict(),
+            "step": 1,
+            "val_loss": 0.5,
+        },
+        ckpt_path,
+    )
+
+    # Fresh instances mimicking a "load checkpoint and resume" flow.
+    unet2 = UNetOD(
+        in_channels=C, base_channels=8, channel_mults=(1, 2, 4),
+        time_emb_dim=64, cond_emb_dim=64,
+    )
+    ema2 = EMA(unet2, decay=0.99)
+    optim2 = torch.optim.AdamW(unet2.parameters(), lr=2e-4)
+    ckpt = torch.load(ckpt_path, weights_only=True)
+    unet2.load_state_dict(ckpt["model_state_dict"])
+    ema2.load_state_dict(ckpt["ema_state_dict"])
+    optim2.load_state_dict(ckpt["optimizer_state_dict"])
+
+    # Model params match.
+    for (n1, p1), (n2, p2) in zip(unet.named_parameters(), unet2.named_parameters()):
+        assert n1 == n2
+        assert torch.allclose(p1, p2), n1
+    # EMA buffers match.
+    for (n1, b1), (n2, b2) in zip(ema.named_buffers(), ema2.named_buffers()):
+        assert n1 == n2
+        assert torch.allclose(b1, b2), n1
+    # Forward passes agree on a random input.
+    x_in = torch.randn(B, C, H, W)
+    t_in = torch.tensor([10, 50], dtype=torch.long)
+    with torch.no_grad():
+        out1 = unet(x_in, t_in, *cond)
+        out2 = unet2(x_in, t_in, *cond)
+    assert torch.allclose(out1, out2, atol=1e-6)
+    # Scalars survived.
+    assert ckpt["step"] == 1
+    assert ckpt["val_loss"] == pytest.approx(0.5)
