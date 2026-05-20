@@ -86,15 +86,30 @@ train:
   amp: true
   eval_every: 5
   ckpt_dir: results/stage4/smoke/ckpt
-  # PR5B-1 plumbing only. Setting this to anything other than null
-  # raises NotImplementedError in run_stage4_train.py; the
-  # raw-count -> weight_map -> training_loss wiring lands in PR5B-3b.
-  # When enabled, expected shape is:
-  #   loss_weight:
-  #     mode: log1p
-  #     alpha: 2.0   # nonzero-pixel boost
-  #     beta:  0.5   # per-log1p(count) factor
-  loss_weight: null
+  # ---------------------------------------------------------------------
+  # CHANGED vs PR5B-2 baseline: PR5B-3b enables the weighted ε-loss.
+  # Formula (see ``src.models.diffusion.build_weight_map``):
+  #
+  #   w_raw = 1 + alpha * I(raw_count > 0) + beta * log1p(raw_count)
+  #   w     = w_raw / w_raw.mean()                # normalize=='mean'
+  #
+  # alpha=2.0 / beta=0.5 is a *mild* setting -- on the 0.117 %-sparse
+  # 12 km eVTOL tensor the per-cell weight ranges roughly
+  # ``[1, 1 + 2 + 0.5 * log1p(count_tail)]`` ~ ``[1, 4-5]``, with the
+  # raw-zero base 1.0 / mean ~ 1.003 ~= 1. This keeps loss magnitude
+  # comparable to the unweighted F.mse_loss case (so val_loss_ema stays
+  # interpretable) while raising the gradient signal on real nonzero
+  # OD pairs. We deliberately do NOT start at alpha=5 / beta=1.0:
+  # heavier weights risk pushing the model into a "hot spot" mode where
+  # the few large-count cells dominate gradients and the zero region
+  # gets under-fit -- the opposite of the PR5B-3 failure but equally
+  # bad downstream.
+  # ---------------------------------------------------------------------
+  loss_weight:
+    mode: nonzero_log1p
+    alpha: 2.0
+    beta: 0.5
+    normalize: mean
 
 sample:
   n_omega: 64

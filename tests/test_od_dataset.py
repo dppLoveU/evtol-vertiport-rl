@@ -365,6 +365,67 @@ def test_dataset_scheme_mismatch_in_norm_stats(
         )
 
 
+# --- Stage 4B-5B PR5B-3b: return_raw -------------------------------------
+
+
+def test_dataset_return_raw_default_is_two_tuple(
+    od_files: tuple[Path, Path],
+) -> None:
+    """The default 2-tuple contract is preserved (no caller breakage)."""
+    od_path, meta_path = od_files
+    ds = ODDataset(od_path, meta_path, "train")
+    assert ds.return_raw is False
+    item = ds[0]
+    assert isinstance(item, tuple) and len(item) == 2
+
+
+def test_dataset_return_raw_true_returns_three_tuple(
+    od_files: tuple[Path, Path],
+) -> None:
+    od_path, meta_path = od_files
+    ds = ODDataset(od_path, meta_path, "train", return_raw=True)
+    assert ds.return_raw is True
+    item = ds[0]
+    assert isinstance(item, tuple) and len(item) == 3
+    x, cond, raw_padded = item
+    assert isinstance(cond, dict)
+    assert x.shape == raw_padded.shape
+    assert raw_padded.dtype == np.float32
+
+
+def test_dataset_return_raw_matches_padded_counts(
+    od_files: tuple[Path, Path],
+) -> None:
+    """raw_padded carries the un-normalised, already-padded counts."""
+    od_path, meta_path = od_files
+    ds = ODDataset(od_path, meta_path, "train", return_raw=True)
+    _, _, raw_padded = ds[10]
+    # The Z x Z top-left block matches the raw OD slice exactly.
+    raw_slice = np.load(od_path)[10].astype(np.float32)
+    np.testing.assert_array_equal(raw_padded[0, :Z, :Z], raw_slice)
+    # raw_padded is NOT normalised: integer values come through unchanged.
+    assert raw_padded[0, :Z, :Z].max() == raw_slice.max()
+    assert raw_padded[0, :Z, :Z].min() == raw_slice.min()
+
+
+def test_dataset_return_raw_padding_is_zero(
+    od_files: tuple[Path, Path],
+) -> None:
+    """Padded rows/cols on raw_padded are exact zeros (matches pad_hw)."""
+    od_path, meta_path = od_files
+    ds = ODDataset(od_path, meta_path, "train", return_raw=True)
+    _, _, raw_padded = ds[0]
+    assert np.all(raw_padded[:, Z:, :] == 0.0)
+    assert np.all(raw_padded[:, :, Z:] == 0.0)
+
+
+def test_dataset_return_raw_window_shape(od_files: tuple[Path, Path]) -> None:
+    od_path, meta_path = od_files
+    ds = ODDataset(od_path, meta_path, "train", window=3, return_raw=True)
+    _, _, raw_padded = ds[0]
+    assert raw_padded.shape == (3, ds.pad_size, ds.pad_size)
+
+
 def test_norm_stats_json_preserves_scheme_tag(tmp_path: Path) -> None:
     # save+load preserves the scheme tag and the scheme-specific keys
     # for both schemes, and the two scheme caches occupy distinct files.

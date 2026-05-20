@@ -9,7 +9,12 @@ from __future__ import annotations
 import pytest
 import torch
 
-from src.models.diffusion import GaussianDiffusion, _cosine_betas, _linear_betas
+from src.models.diffusion import (
+    GaussianDiffusion,
+    _cosine_betas,
+    _linear_betas,
+    build_weight_map,
+)
 from src.models.ema import EMA
 from src.models.unet_od import (
     ConditionEmbedding,
@@ -314,6 +319,86 @@ def test_training_loss_weight_map_changes_loss_value(
     torch.manual_seed(0)
     loss_w = diff.training_loss(unet, x0, *cond, t=t, weight_map=weight)
     assert not torch.allclose(loss_unw, loss_w, atol=1e-4)
+
+
+# --- Stage 4B-5B PR5B-3b: build_weight_map ------------------------------
+
+
+def test_build_weight_map_zero_count_gets_base_one_unnormalised() -> None:
+    """w = 1 + alpha * I(raw > 0) + beta * log1p(raw). raw=0 -> w=1."""
+    raw = torch.zeros(2, 1, 4, 4)
+    cfg = {"mode": "nonzero_log1p", "alpha": 2.0, "beta": 0.5}
+    w = build_weight_map(raw, cfg)
+    assert w.shape == raw.shape
+    assert torch.allclose(w, torch.ones_like(w))
+
+
+def test_build_weight_map_count_one_matches_formula() -> None:
+    raw = torch.ones(2, 1, 3, 3)
+    cfg = {"mode": "nonzero_log1p", "alpha": 2.0, "beta": 0.5}
+    w = build_weight_map(raw, cfg)
+    expected = 1.0 + 2.0 + 0.5 * float(torch.log1p(torch.tensor(1.0)))
+    assert torch.allclose(w, torch.full_like(w, expected), atol=1e-6)
+
+
+def test_build_weight_map_normalize_mean_yields_mean_one() -> None:
+    raw = torch.zeros(1, 1, 8, 8)
+    # A few hot cells; most are zero.
+    raw[0, 0, 0, 0] = 5.0
+    raw[0, 0, 1, 1] = 10.0
+    cfg = {"mode": "nonzero_log1p", "alpha": 2.0, "beta": 0.5, "normalize": "mean"}
+    w = build_weight_map(raw, cfg)
+    assert float(w.mean().item()) == pytest.approx(1.0, abs=1e-6)
+    # Hot cells are still heavier than the base-one zero cells after norm.
+    assert w[0, 0, 0, 0] > w[0, 0, 5, 5]
+    assert w[0, 0, 1, 1] > w[0, 0, 0, 0]
+
+
+def test_build_weight_map_is_detached() -> None:
+    """The returned weight tensor must not propagate gradients."""
+    raw = torch.ones(1, 1, 4, 4, requires_grad=True)
+    cfg = {"mode": "nonzero_log1p", "alpha": 2.0, "beta": 0.5, "normalize": "mean"}
+    w = build_weight_map(raw, cfg)
+    assert not w.requires_grad
+    # Using it inside a loss must not flow grad back through the raw input.
+    pred = torch.randn(1, 1, 4, 4, requires_grad=True)
+    target = torch.zeros_like(pred)
+    loss = (w * (pred - target) ** 2).mean()
+    loss.backward()
+    assert raw.grad is None
+    assert pred.grad is not None
+
+
+def test_build_weight_map_broadcastable_to_x0() -> None:
+    """Shape matches raw and is the same as the x0 the loss multiplies."""
+    raw = torch.zeros(2, 1, 5, 5)
+    raw[0, 0, 0, 0] = 3.0
+    cfg = {"mode": "nonzero_log1p", "alpha": 1.0, "beta": 0.0}
+    w = build_weight_map(raw, cfg)
+    pred = torch.randn_like(raw)
+    target = torch.zeros_like(raw)
+    loss = (w * (pred - target) ** 2).mean()
+    assert loss.ndim == 0 and torch.isfinite(loss)
+
+
+def test_build_weight_map_dtype_and_device() -> None:
+    raw = torch.tensor([[[[0.0, 1.0], [2.0, 0.0]]]], dtype=torch.float64)
+    cfg = {"mode": "nonzero_log1p", "alpha": 2.0, "beta": 0.5}
+    w = build_weight_map(raw, cfg)
+    assert w.dtype == torch.float32
+    assert w.device == raw.device
+
+
+def test_build_weight_map_rejects_unsupported_mode() -> None:
+    raw = torch.zeros(1, 1, 2, 2)
+    with pytest.raises(ValueError):
+        build_weight_map(raw, {"mode": "exp_count", "alpha": 1.0})
+
+
+def test_build_weight_map_rejects_unsupported_normalize() -> None:
+    raw = torch.zeros(1, 1, 2, 2)
+    with pytest.raises(ValueError):
+        build_weight_map(raw, {"mode": "nonzero_log1p", "normalize": "max"})
 
 
 # --- checkpoint round-trip (Stage 4B-2 smoke) -----------------------------

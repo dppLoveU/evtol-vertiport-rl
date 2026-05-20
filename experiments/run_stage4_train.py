@@ -54,7 +54,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from src.data.od_dataset import ODDataset
-from src.models.diffusion import GaussianDiffusion
+from src.models.diffusion import GaussianDiffusion, build_weight_map
 from src.models.ema import EMA
 from src.models.unet_od import UNetOD
 from src.utils.metrics_dist import marginal_compare
@@ -122,7 +122,12 @@ PROFILES: dict[str, dict[str, Any]] = {
 
 
 class _TorchODDataset(Dataset):
-    """Wrap ODDataset so DataLoader's default collate yields tensors."""
+    """Wrap ODDataset so DataLoader's default collate yields tensors.
+
+    Mirrors the 2-tuple or 3-tuple contract of the wrapped ``ODDataset``:
+    when ``base.return_raw=True`` a third element ``raw_padded`` is
+    forwarded as a float32 tensor (Stage 4B-5B PR5B-3b weighted loss).
+    """
 
     def __init__(self, base: ODDataset) -> None:
         self.base = base
@@ -131,7 +136,11 @@ class _TorchODDataset(Dataset):
         return len(self.base)
 
     def __getitem__(self, idx: int):
-        x_np, cond = self.base[idx]
+        item = self.base[idx]
+        if len(item) == 3:
+            x_np, cond, raw_np = item
+            return torch.from_numpy(x_np), cond, torch.from_numpy(raw_np)
+        x_np, cond = item
         return torch.from_numpy(x_np), cond
 
 
@@ -493,18 +502,34 @@ def main() -> None:
     if "guidance_scale" in yaml_diffusion:
         profile["guidance_scale"] = float(yaml_diffusion["guidance_scale"])
 
-    # train.loss_weight is plumbed in PR5B-1 but not yet enabled. When
-    # set to anything other than null/None the script refuses to run --
-    # wiring (raw counts -> weight_map -> training_loss) lands in
-    # PR5B-3b.
+    # train.loss_weight (Stage 4B-5B PR5B-3b): when null, the script
+    # passes ``weight_map=None`` to ``GaussianDiffusion.training_loss``
+    # and the loss is exactly ``F.mse_loss(pred, noise)`` (bit-equal to
+    # the pre-PR5B-1 behaviour). When a dict is provided, the train
+    # dataset is built with ``return_raw=True``, a weight map is
+    # computed each step from the raw padded counts via
+    # ``build_weight_map``, and the loss becomes
+    # ``(weight_map * (pred - noise) ** 2).mean()``. Validation still
+    # uses the unweighted ``training_loss`` so ``val_loss_ema`` stays
+    # comparable across configs.
     yaml_loss_weight = (cfg.get("train") or {}).get("loss_weight", None)
-    if yaml_loss_weight is not None:
-        raise NotImplementedError(
-            "train.loss_weight is plumbed but not yet enabled "
-            "(Stage 4B-5B PR5B-1). Got "
-            f"{yaml_loss_weight!r}; expected null. The raw-count -> "
-            "weight_map wiring lands in PR5B-3b."
-        )
+    weight_enabled = yaml_loss_weight is not None
+    if weight_enabled:
+        # Validate the supported subset; build_weight_map raises again
+        # on bad mode/normalize, but front-load the check here so the
+        # console summary below is honest.
+        lw_mode = yaml_loss_weight.get("mode")
+        if lw_mode != "nonzero_log1p":
+            raise ValueError(
+                f"train.loss_weight.mode must be 'nonzero_log1p' "
+                f"(PR5B-3b); got {lw_mode!r}"
+            )
+        lw_normalize = yaml_loss_weight.get("normalize", None)
+        if lw_normalize not in (None, "mean"):
+            raise ValueError(
+                f"train.loss_weight.normalize must be 'mean' or null "
+                f"(PR5B-3b); got {lw_normalize!r}"
+            )
 
     # Normalization scheme: "global_clip" (default) or "zero_pinned_nonzero".
     data_scheme = (cfg.get("data") or {}).get("scheme", "global_clip")
@@ -544,12 +569,22 @@ def main() -> None:
     print(f"  resume              : {args.resume}")
     print(f"  seed                : {seed}")
     print(f"  data.scheme         : {data_scheme}")
-    print(f"  loss_weight (cfg)   : {yaml_loss_weight}  (plumbing only, not enabled)")
+    if weight_enabled:
+        print(
+            f"  loss_weight (cfg)   : enabled  mode={yaml_loss_weight['mode']}  "
+            f"alpha={float(yaml_loss_weight.get('alpha', 0.0))}  "
+            f"beta={float(yaml_loss_weight.get('beta', 0.0))}  "
+            f"normalize={yaml_loss_weight.get('normalize')}"
+        )
+    else:
+        print(f"  loss_weight (cfg)   : None  (unweighted F.mse_loss)")
     print(f"  profile             :")
     for k, v in profile.items():
         print(f"    {k:<22}: {v}")
 
     # --- datasets ---
+    # train_base needs raw padded counts when weighted loss is on;
+    # val_base never does (val uses unweighted F.mse_loss in _evaluate).
     od_path = _resolve(cfg["input"]["od_path"])
     meta_path = _resolve(cfg["input"]["meta_path"])
     train_base = ODDataset(
@@ -559,6 +594,7 @@ def main() -> None:
         clip_val=cfg["data"]["clip_val"],
         scheme=data_scheme,
         split_cfg=cfg["data"]["split"],
+        return_raw=weight_enabled,
     )
     val_base = ODDataset(
         od_path, meta_path, "val",
@@ -632,11 +668,22 @@ def main() -> None:
         lr = _get_lr(step, warmup, base_lr)
         _set_lr(optim, lr)
 
-        x, cond = next(train_iter)
+        batch = next(train_iter)
+        if weight_enabled:
+            x, cond, raw_padded = batch
+            raw_padded = raw_padded.to(device, non_blocking=True)
+        else:
+            x, cond = batch
+            raw_padded = None
         x = x.to(device, non_blocking=True)
         hour = cond["hour"].to(device)
         dow = cond["day_of_week"].to(device)
         is_weekend = cond["is_weekend"].to(device)
+        weight_map = (
+            build_weight_map(raw_padded, yaml_loss_weight)
+            if weight_enabled
+            else None
+        )
         if device.type == "cuda":
             torch.cuda.synchronize()
         t0 = time.time()
@@ -644,6 +691,7 @@ def main() -> None:
             loss = diff.training_loss(
                 model, x, hour, dow, is_weekend,
                 cond_dropout_prob=float(profile["cond_dropout_prob"]),
+                weight_map=weight_map,
             )
         loss.backward()
         grad_norm = nn.utils.clip_grad_norm_(model.parameters(), grad_clip)

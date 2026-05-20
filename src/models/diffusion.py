@@ -18,6 +18,61 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def build_weight_map(
+    raw_padded: torch.Tensor,
+    cfg: dict[str, Any],
+) -> torch.Tensor:
+    """Per-pixel ε-loss weight map from raw OD counts (Stage 4B-5B PR5B-3b).
+
+    Pure function. Reads a ``train.loss_weight`` YAML block and returns a
+    detached weight tensor matching ``raw_padded``'s shape, dtype
+    ``float32`` on ``raw_padded``'s device. Intended as the
+    ``weight_map`` argument of ``GaussianDiffusion.training_loss``; the
+    caller is responsible for forwarding the raw (un-normalised) padded
+    counts to this helper so the weight is computed from data, not from
+    the normalised x0.
+
+    Supported ``cfg`` shape::
+
+        loss_weight:
+          mode: nonzero_log1p
+          alpha: 2.0    # nonzero-pixel boost
+          beta:  0.5    # per-log1p(count) factor
+          normalize: mean   # or null
+
+    Formula::
+
+        w_raw = 1 + alpha * I(raw_count > 0) + beta * log1p(raw_count)
+        w     = w_raw / w_raw.mean()     # when normalize == "mean"
+
+    The base 1.0 ensures raw-zero entries (including the padded strip)
+    always carry a positive weight, so the loss does not become a pure
+    masked loss when ``alpha`` or ``beta`` is large. Padded raw-zero
+    entries are treated identically to in-bbox raw-zero entries.
+    """
+    mode = cfg.get("mode", "nonzero_log1p")
+    if mode != "nonzero_log1p":
+        raise ValueError(
+            f"unsupported loss_weight.mode {mode!r} -- only 'nonzero_log1p' "
+            "is wired in PR5B-3b"
+        )
+    alpha = float(cfg.get("alpha", 0.0))
+    beta = float(cfg.get("beta", 0.0))
+    normalize = cfg.get("normalize", None)
+    if normalize not in (None, "mean"):
+        raise ValueError(
+            f"unsupported loss_weight.normalize {normalize!r} -- only "
+            "'mean' or null are wired in PR5B-3b"
+        )
+    with torch.no_grad():
+        raw = raw_padded.to(dtype=torch.float32)
+        nz = (raw > 0).to(raw.dtype)
+        w = 1.0 + alpha * nz + beta * torch.log1p(raw)
+        if normalize == "mean":
+            w = w / w.mean()
+    return w.detach()
+
+
 def _cosine_betas(num_steps: int, s: float = 0.008) -> torch.Tensor:
     """Cosine beta schedule from Nichol & Dhariwal 2021."""
     steps = num_steps + 1

@@ -311,11 +311,22 @@ class ODDataset:
         own statistics. If a ``scheme`` tag is present in
         ``norm_stats`` it must match the ``scheme`` argument.
     split_cfg : day-range split config; defaults to ``DEFAULT_SPLIT``.
+    return_raw : when ``True``, ``__getitem__`` returns a 3-tuple
+        ``(x, condition, raw_padded)`` where ``raw_padded`` is the
+        un-normalised, already-padded float32 count tensor of shape
+        ``[window, pad_size, pad_size]`` (Stage 4B-5B PR5B-3b: used to
+        compute the weighted-ε-loss weight map from raw counts).
+        Padded entries (rows/cols ``n_zones..pad_size-1``) are 0,
+        matching the ``pad_hw`` behaviour. The default ``False``
+        preserves the pre-PR5B-3b 2-tuple contract so the older
+        ``configs/diffusion.yaml`` / ``configs/diffusion_12km.yaml``
+        callers see no change.
 
     A sample is ``(x, condition)`` where ``x`` is a normalized, padded
     ``[window, pad_size, pad_size]`` float32 array and ``condition`` is a
     dict with ``hour`` / ``day_of_week`` / ``is_weekend`` for the
-    window's first slot.
+    window's first slot. When ``return_raw=True`` the sample is a
+    3-tuple ``(x, condition, raw_padded)``.
     """
 
     def __init__(
@@ -330,6 +341,7 @@ class ODDataset:
         scheme: str = "global_clip",
         norm_stats: dict[str, Any] | None = None,
         split_cfg: dict[str, list[int]] | None = None,
+        return_raw: bool = False,
     ) -> None:
         if split not in _SPLIT_KEYS:
             raise ValueError(f"split must be one of {sorted(_SPLIT_KEYS)}, got {split!r}")
@@ -353,6 +365,7 @@ class ODDataset:
         self.pad_multiple = pad_multiple
         self.pad_size: int = next_pad_size(self.n_zones, pad_multiple)
         self.scheme = scheme
+        self.return_raw = bool(return_raw)
         self._split_cfg = split_cfg if split_cfg is not None else DEFAULT_SPLIT
 
         # Memory-map the OD tensor -- the 593 MB array is never resident.
@@ -414,12 +427,17 @@ class ODDataset:
             return inverse_norm(x, self.norm_stats)
         return inverse_norm_zero_pinned(x, self.norm_stats)
 
-    def __getitem__(self, idx: int) -> tuple[np.ndarray, dict[str, int]]:
+    def __getitem__(
+        self, idx: int
+    ) -> tuple[np.ndarray, dict[str, int]] | tuple[np.ndarray, dict[str, int], np.ndarray]:
         start = self._starts[idx]
         raw = np.asarray(self._od[start : start + self.window], dtype=np.float64)
         padded = pad_hw(raw, self.pad_size)
         x = self._apply_norm(padded)
         cond = slot_to_condition(start, self.start_dt, self.slots_per_day, self.bin_min)
+        if self.return_raw:
+            raw_padded = padded.astype(np.float32)
+            return x, cond, raw_padded
         return x, cond
 
     def inverse_transform(self, x: np.ndarray) -> np.ndarray:
