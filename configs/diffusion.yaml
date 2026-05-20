@@ -37,7 +37,11 @@ data:
   # mu/sigma are computed from the train split on first build and cached
   # to norm_stats_path; val/test load the cached stats. JSON (3 scalars),
   # not .pt -- Stage 4A has no torch dependency.
-  clip_val: 3.0
+  # clip_val: 100.0 adopted from the Stage-4B-0 normalization ablation
+  # (results/stage4/norm_ablation.csv); the original 3.0 saturated every
+  # nonzero entry on the 0.117%-sparse eVTOL tensor. See
+  # docs/decisions.md 2026-05-20.
+  clip_val: 100.0
   norm_stats_path: data/processed/od_norm_stats.json
 
   # Train/val/test split over the 11-day window. T = 528 slots, 48 per

@@ -521,3 +521,57 @@ user):
 Recorded here so Stage 4B starts from this finding rather than
 rediscovering it. Stage 4A itself (dataset / padding / inverse-transform
 plumbing) is correct and complete.
+
+---
+
+## 2026-05-20 — Stage 4B-0: normalization ablation → ACCEPTED scheme C (clip=100) as the Stage-4B model-smoke baseline
+
+**Accepted as the Stage-4B model-smoke baseline (not a final training
+verdict).** `configs/diffusion.yaml::data.clip_val` is now `100.0`; the
+stale `data/processed/od_norm_stats.json` (computed at `clip_val=3`)
+was deleted and re-cached at `clip_val=100`. If the 4B model smoke later
+shows mode collapse to zeros, the next ablation worth trying is the
+nonzero-only mu/sigma hybrid with a larger clip — see the "Known
+weakness" note below. The 4A dataset smoke and `tests/test_od_dataset.py`
+both still pass at `clip_val=100` (smoke 2026-05-20: inverse round-trip
+`max|err| = 0.0000` vs. 3.9 at `clip_val=3`; tests 19/19 green).
+
+The 4A finding (entry above) showed that `clip_val=3` saturates every
+nonzero entry to +1 because `sigma=0.0279` on the 0.117%-sparse tensor.
+`experiments/run_stage4_norm_ablation.py` compared five candidates on the
+train split (slots 0..431); raw numbers in
+`results/stage4/norm_ablation.csv`.
+
+| scheme                              | zero    | nz_mean | nz_std | pct_sat | err_max | gap 1..20 | reco                       |
+|-------------------------------------|---------|---------|--------|---------|---------|-----------|----------------------------|
+| A `current_global_clip3`            | -0.012  |  1.000  | 0.000  | 100.00% |  9.91   |   0.000   | rejected (undistinguishable) |
+| B `global_clip30`                   | -0.001  |  0.841  | 0.045  |   7.44% |  8.69   |   0.000   | rejected (undistinguishable) |
+| C `global_clip100`                  | -0.0004 |  0.261  | 0.045  |   0.00% |  0.00   |   0.140   | **primary**                  |
+| D `nonzero_global_clip3` (z→-1)     | -1.000  | -0.010  | 0.282  |   1.08% |  7.98   |   0.000   | rejected (undistinguishable) |
+| E `log1p_minmax_p999_nonzero`       | -1.000  | -0.097  | 0.155  |   0.27% |  6.00   |   0.000   | rejected (undistinguishable) |
+
+`gap 1..20` is the smallest adjacent gap among normalized {1, 2, 5, 10,
+20}. Probe values for C are {0.248, 0.394, 0.643, 0.860, 1.000} — only
+scheme that keeps the five probe counts pairwise distinguishable. D and
+E both saturate count ≥ 5 to +1 because the nonzero log1p distribution is
+extremely tight (`mu_nz=0.727`, `sigma_nz=0.126`; 99.9% of nonzero
+log1p ≤ 1.609 ≈ log1p(4)).
+
+**Change**: adopted **scheme C** for the Stage-4B model smoke —
+`clip_val` raised `3.0` → `100.0` in `configs/diffusion.yaml::data`
+(everything else unchanged). No code change to
+`src/data/od_dataset.py`: scheme C is exactly the existing pipeline at a
+higher clip cap.
+
+**Caveat — known weakness of C**: zeros land at -0.0004 and the nonzero
+mass occupies 0.25..1.0, so only the upper half of `[-1, 1]` is used.
+The diffusion model sees a one-sided distribution; the zero / count=1
+gap is 0.25, not the 0.9-ish gap that D's `zero → -1` pinning would give.
+If 4B model smoke shows "all-zero" mode collapse, the natural next
+ablation is a hybrid: nonzero-only mu/sigma (like D) **but with a much
+larger clip_val** (e.g. clip 10 or 20 so count=5..20 stop saturating).
+That hybrid was not in the ablation set requested here.
+
+**Status**: accepted as the Stage-4B model-smoke baseline only; the
+final clip / normalization choice for the 4B production training run
+may still change after the smoke is observed.
