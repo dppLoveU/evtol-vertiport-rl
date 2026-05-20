@@ -1,0 +1,39 @@
+{
+  "profile": "medium",
+  "max_steps": 20,
+  "final_val_loss_ema": 1.1418394496043522,
+  "best_val_loss_ema": 1.1418394496043522,
+  "train_loss_last": 0.9072538614273071,
+  "eval_history": [
+    {
+      "step": 10.0,
+      "val_loss_ema": 1.143956904609998
+    },
+    {
+      "step": 20.0,
+      "val_loss_ema": 1.1418394496043522
+    }
+  ],
+  "final_sample_diag": {
+    "real_nonzero_ratio": 0.0017290405838376647,
+    "gen_nonzero_ratio": 0.4261825827696689,
+    "real_row_sum_mean": 0.9970518867924528,
+    "real_row_sum_std": 2.0740116507619817,
+    "gen_row_sum_mean": 2067.647641509434,
+    "gen_row_sum_std": 345.4851540158867,
+    "real_col_sum_mean": 0.9970518867924528,
+    "real_col_sum_std": 2.7423906937986695,
+    "gen_col_sum_mean": 2067.647641509434,
+    "gen_col_sum_std": 805.6831145259117,
+    "row_sum_ks_stat": 1.0,
+    "col_sum_ks_stat": 1.0,
+    "gen_min": 0.0,
+    "gen_max": 24.0,
+    "gen_mean": 3.9012219651121396,
+    "gen_cont_nonzero_ratio": 0.47994081523673904,
+    "gen_cont_min": 0.0,
+    "gen_cont_max": 24.477898406910093,
+    "gen_cont_mean": 3.909370048024671
+  },
+  "wall_time_s": 53.07396960258484
+}

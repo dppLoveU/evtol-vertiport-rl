@@ -433,6 +433,30 @@ def main() -> None:
         help="Override the profile's max_steps (debug only).",
     )
     parser.add_argument(
+        "--eval_every",
+        type=int,
+        default=None,
+        help="Override the profile's eval_every (debug only).",
+    )
+    parser.add_argument(
+        "--save_every",
+        type=int,
+        default=None,
+        help="Override the profile's save_every (debug only).",
+    )
+    parser.add_argument(
+        "--output_suffix",
+        type=str,
+        default="",
+        help=(
+            "Optional suffix appended to run_dir / out_dir basenames so a "
+            "debug run does not clobber the canonical profile dirs. "
+            "Include the leading underscore yourself, e.g. '_canary' yields "
+            "models/diffusion_od_medium_canary/ and "
+            "results/stage4/train_medium_canary/."
+        ),
+    )
+    parser.add_argument(
         "--models_dir",
         type=Path,
         default=REPO / "models",
@@ -450,6 +474,10 @@ def main() -> None:
     profile = dict(PROFILES[profile_name])
     if args.max_steps is not None:
         profile["max_steps"] = int(args.max_steps)
+    if args.eval_every is not None:
+        profile["eval_every"] = int(args.eval_every)
+    if args.save_every is not None:
+        profile["save_every"] = int(args.save_every)
 
     with open(args.config) as fh:
         cfg = yaml.safe_load(fh)
@@ -460,8 +488,9 @@ def main() -> None:
     amp_enabled = bool(cfg["train"]["amp"]) and device.type == "cuda"
     amp_dtype = torch.bfloat16  # see docs/decisions.md 2026-05-20
 
-    run_dir = (args.models_dir / f"diffusion_od_{profile_name}").resolve()
-    out_dir = (args.results_dir / f"train_{profile_name}").resolve()
+    suffix = args.output_suffix or ""
+    run_dir = (args.models_dir / f"diffusion_od_{profile_name}{suffix}").resolve()
+    out_dir = (args.results_dir / f"train_{profile_name}{suffix}").resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
