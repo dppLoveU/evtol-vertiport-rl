@@ -1279,3 +1279,178 @@ staged. This commit archives only the failed-diagnostic artifacts under
 plus this `docs/decisions.md` entry and the matching `docs/progress.md`
 line. The PR5B-3b plumbing change is a deliberately separate PR so that
 the A-only failure stays attributable on its own.
+
+## 2026-05-20 Stage 4B-5B PR5B-3b-3: mild weighted loss falsified
+
+**Context**: PR5B-3 (commit `4862724`) falsified the "zero-pinned
+normalization alone is sufficient" hypothesis and set up direction **B**
+(weighted ε-loss on nonzero entries) as the next lever. PR5B-3b-1
+(commit `2fdafb7`) implemented the weighted-loss plumbing
+(`ODDataset.return_raw`, `build_weight_map`, `training_loss(weight_map=
+...)`-wiring); PR5B-3b-2 (commit `1c8e733`) validated it with a 20-step
+integration smoke. PR5B-3b-3 (this entry) ran the real 1000-step 12 km
+pilot under `configs/diffusion_12km_zpin_weighted.yaml` with
+`train.loss_weight={mode: nonzero_log1p, alpha: 2.0, beta: 0.5,
+normalize: mean}` to test whether **mild** mean-normalised weighted
+loss on top of the zpin scheme closes the over-density gap.
+
+**Decision**: the hypothesis **"mild ``nonzero_log1p`` weighted loss
+with α=2.0 / β=0.5 / normalize=mean is sufficient on top of zpin"** is
+**falsified**. Direction A (zpin) + direction B (mild weighted) is
+**not** sufficient at the pilot architecture / step budget. The next
+move is **NOT** another blind α/β retune nor a medium-budget retry
+under the same loss family — both would re-explore a search space
+where the present pilot already maps the gradient. The next move is a
+**strategy decision** (see "Next-step gate" below). No new training
+has been launched.
+
+**Evidence**: `python -m experiments.run_stage4_train --profile pilot
+--config configs/diffusion_12km_zpin_weighted.yaml --output_suffix
+_zpin_weighted` (wall 100.1 s, RTX 5070 Ti, bfloat16 AMP, pilot
+profile 920 025-param U-Net, splits 240/48/48, pad 530→544, fixed
+seed=42 — bit-comparable to PR5B-3). Effective hyperparameters at
+runtime: `data.scheme=zero_pinned_nonzero`, `diffusion.guidance_scale=
+1.0` (YAML override of profile default 2.0 verified), `train.
+loss_weight` populated (run-summary print "enabled  mode=nonzero_log1p
+alpha=2.0  beta=0.5  normalize=mean"). Training stayed finite:
+train_loss 1.336 → 0.022 over 1000 steps, val_loss_ema monotone-
+decreasing 0.817 → 0.439 → 0.220 → 0.112 → **0.060** at step 1000
+(best = final); grad_norm finite, no NaN/inf, GPU peak 5 433.2 /
+5 830.1 MB. End-of-run `sample_diag` (n=4, DDIM 50, EMA, gs=1.0):
+
+| metric                       | PR5B-3 (zpin only) | PR5B-3b-3 (zpin + weighted) | Δ vs PR5B-3 |
+|------------------------------|--------------------|-----------------------------|-------------|
+| gen_nonzero_ratio (rounded)  | 34.0277 %          | **37.7617 %**               | **+3.7 pp** |
+| gen / real (× 0.2642 %)      | 128.8 ×            | **143.0 ×**                 | +11 %       |
+| gen_cont_nonzero_ratio       | 73.96 %            | 75.03 %                     | +1.1 pp     |
+| gen_max (rounded)            | 34                 | **45**                      | +11         |
+| gen_mean (rounded)           | 0.4546             | 0.5356                      | +18 %       |
+| gen_row_sum_mean             | 240.9              | 283.9                       | +18 %       |
+| row_sum_ks_stat              | 1.000              | 1.000                       | n/a         |
+| col_sum_ks_stat              | 1.000              | 1.000                       | n/a         |
+| val_loss_ema (step 1000)     | 0.0606             | 0.0601                      | ~0          |
+| wall (s)                     | 100.5              | 100.1                       | ~0          |
+
+PR5B-3b-3 acceptance gates from the PR5B-3 plan
+(`pass: 0.05 % < r < 2.6 %`; `mild: 2.6 %–6.6 %`; `fail: > 6.6 % or
+< 0.05 %`): **FAIL at 37.76 %**, **5.7 ×** the upper edge of the fail
+band. **Extra falsification target** (from PR5B-3 Findings 2 — "must
+move ``gen_nonzero_ratio`` strictly below **21.45 %**", the 4B-5A
+no-CFG posthoc lower bound on the global_clip medium ckpt):
+**MISSED by +16.3 pp**.
+
+**Findings**:
+
+1. **Mild weighted loss did not move the failure mode.** All density
+   metrics went the **wrong direction** vs PR5B-3 zpin-only: gen_nonzero
+   +3.7 pp, gen_max +11, gen_mean +18 %, gen_row_sum_mean +18 %. The
+   `~3.3 × w_zero` weight ratio after `normalize: mean` is too
+   symmetric to break the "many small positives everywhere" attractor;
+   the model still places measurable mass into ~75 % of cells before
+   rounding (pre-round) and ~38 % after rounding (post-`np.rint`).
+
+2. **`val_loss_ema` is essentially unchanged.** Step-1000
+   val_loss_ema = 0.0601 (vs PR5B-3 0.0606) confirms `_evaluate` is
+   correctly on the unweighted path (`weight_map=None`) — the
+   training-side weighted loss did its job in terms of gradient signal
+   but the resulting model is statistically near-isomorphic to the
+   PR5B-3 model on the val ε-MSE metric. This is consistent with
+   mean-normalisation pinning `w.mean()≈1`: the loss landscape has
+   the same global shape; only the *local* gradient at nonzero pixels
+   is amplified ~3.3 ×, and that amplification at α=2/β=0.5 is too
+   small to redistribute mass on the 0.117 %-sparse tensor in 1000
+   steps.
+
+3. **Wall, GPU, stability are clean — the diagnostic is purely about
+   sample distribution.** Training stayed finite throughout, AMP
+   bfloat16 stable, GPU 5 433 / 5 830 MB (12 929 MB free, no OOM
+   risk), and the integration smoke (PR5B-3b-2) had already proved
+   the wiring runnable. There is no infra regression — the lever
+   itself is necessary-but-not-sufficient at the chosen strength.
+
+4. **Two-direction map now closes a useful slice of the search
+   space.** Combining PR5B-3 and PR5B-3b-3: at the **pilot** scale
+   (240 train slots / 1000 steps / 920k-param U-Net / gs=1.0):
+     * (A=global_clip, B=null) — 4B-4B pilot → ~50–100 × over-dense.
+     * (A=zpin, B=null) — PR5B-3 → 128.8 × over-dense, gen_max ceiling
+       removed.
+     * (A=zpin, B=mild mean-normed) — PR5B-3b-3 → 143.0 × over-dense.
+     * (A=global_clip, B=null, gs=0.0 no-CFG, **medium** ckpt) —
+       4B-5A posthoc → 81.2 × over-dense at gs=1.0; 25.8 × at gs=0.0.
+
+   No (A, B) point at the **pilot** scale has reached the `< 21.45 %`
+   falsification floor. The only known sub-21.45 % data point is the
+   gs=0.0 posthoc at the **medium** ckpt — and even that is 25.8 ×
+   real, still ~10 × the `mild` acceptance edge.
+
+**What the falsification rules out**:
+
+  A. Threshold tuning of an existing `inverse_transform` step (the
+     `np.rint` step already rounds the [-0.5, 0.5] band to 0, and
+     gen_cont_nonzero is 75 % — the threshold isn't the bottleneck).
+  B. Guidance reduction alone (4B-5A: gs=0.0 is still 25.8 × real).
+  C. Zero-pinned normalization alone (PR5B-3: 128.8 × real).
+  D. Mild weighted ε-loss with mean-normalisation on top of zpin
+     (this entry: 143.0 × real, slightly **worse** than C).
+
+**What the falsification does NOT rule out** (deliberately left as
+levers, not actions): heavier α / β, dropping `normalize: mean` so the
+absolute weight ratio is bigger than 3.3 ×, occupancy-aware classification
+losses, sample-quality-based checkpoint selection, post-sample
+thresholding calibrated against real val, a two-head model (Bernoulli
+occupancy + nonzero count magnitude), or a non-diffusion baseline. **None of
+these has been planned, written, or scheduled by this entry**.
+
+**Next-step gate (no code, no training launched)**: the next sub-stage
+must produce a **strategy decision** before any new training, framed
+against the evidence above. Specifically, before any new training run
+the next sub-stage must:
+
+  1. **Pick the next lever, with explicit justification against the
+     A/B/C/D ruled-out list.** Candidates (NOT ranked, NOT decided):
+     - heavier weighted loss (e.g. α=5–10, β=1.0, `normalize: null` so
+       nonzero pixels get an absolute 6–13 × weight — accepts the
+       symmetric "hot-spot collapse" risk and budgets a smoke +
+       posthoc to detect it before any medium run);
+     - **occupancy / focal-style loss on the binarised mask** (replace
+       or augment ε-MSE with a Bernoulli/BCE-style term on
+       `I(raw > 0)`, fed in addition to the noise residual; needs
+       new plumbing and a new diffusion-loss interface);
+     - **post-sample thresholding calibrated against real val
+       row-/col-sums** (purely sampling-time, no retrain; converts
+       continuous `[0, gen_max]` to integer counts via a per-row /
+       global threshold chosen to match real `nonzero_ratio` — fast
+       diagnostic, but only repairs the metric, not the underlying
+       prior);
+     - **sample-quality-based ckpt selection** (re-evaluate
+       intermediate ckpts under the existing PR5B-3b checkpoint stream
+       with a denser `n_samples_diag`, pick the best by gen_nonzero —
+       cheap, but only useful if any intermediate ckpt is in-band);
+     - **bootstrap / resampling baseline as a Stage-4 fallback**
+       (skip the diffusion path entirely; sample OD slices by
+       bootstrapping the empirical train tensor; provides a
+       defensible Stage-4 → Stage-5 handoff if the diffusion model
+       continues to falsify);
+     - **two-head model** (Bernoulli occupancy + log1p-count
+       magnitude, jointly diffused or factored — biggest design
+       change, only justified if the simpler levers also fail).
+
+  2. **Re-validate the falsification surface.** The PR5B-3 plan set
+     "must beat 25.8 × over-dense on a medium-step run" as the
+     direction-A/B falsification target. The pilot floor at
+     21.45 % gen_nonzero (the 4B-5A medium-posthoc no-CFG lower
+     bound) is what PR5B-3b-3 was tested against and missed. Any new
+     lever must commit, in writing, to a **pilot-scale** falsification
+     target that is **strictly lower than its baseline comparator**,
+     so the lever has skin in the game before any medium-budget run.
+
+  3. **No further training between this entry and the strategy decision.**
+
+**Explicit non-actions in this commit**: no new training launched, no
+new α/β values tried, no medium run, no Stage 4C, no `od_samples.npy`,
+no `models/diffusion_od_pilot_zpin_weighted/` files staged. This
+commit archives only the failed-diagnostic artifacts under
+`results/stage4/train_pilot_zpin_weighted/` (plots, metrics.json,
+train_log.jsonl) plus this `docs/decisions.md` entry and the matching
+`docs/progress.md` line. The next sub-stage (PR5B-4 or a renumbered
+strategy PR) is deferred pending the strategy decision above.
