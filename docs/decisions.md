@@ -941,3 +941,110 @@ tensor; `od_samples.npy` generation; Stage-4C entry. The first 12 km
 acceptance datapoint will be a pilot run at
 `models/diffusion_od_pilot_12km/` (see CLI in
 `configs/diffusion_12km.yaml` header).
+
+---
+
+## 2026-05-20 — Stage 4B-4C: 12 km fallback hypothesis falsified at the medium architecture
+
+**Hypothesis under test** (recorded 2026-05-18 "Stage 3: low-altitude
+eligibility threshold treated as provisional baseline" + 2026-05-20
+"Stage 4B-4: 12 km eVTOL fallback activated as an independent scenario"):
+*if Stage-4 diffusion underperforms because the eVTOL OD tensor is too
+sparse, switch to the 12 km threshold (7.98% share vs 15 km 5.19%,
+~1.49× denser nonzero ratio); the denser target should tame the
+mode-collapse failure observed under 15 km medium PR3b.*
+
+**Result — FALSIFIED at the medium architecture**.
+
+Evidence: the 12 km medium 5000-step run (`progress.md` 2026-05-20
+4B-4C, archived to `results/stage4/train_medium_12km_failed_dense_debug/`
+and `models/diffusion_od_medium_12km_failed_dense_debug/`) reproduces
+the 15 km PR3b failure pattern and is **quantitatively worse** at the
+final step:
+
+| metric (step 5000)                  | 15 km PR3b | 12 km B-4C    | direction |
+|-------------------------------------|------------|---------------|-----------|
+| `gen_nonzero_ratio` (rounded int)   |     12.68% | **68.43%**    | worse |
+| real val nonzero_ratio              |     0.173% |     0.264%    | (denser) |
+| over-density ratio (gen / real)     |       ~73× |   **~259×**   | worse |
+| `gen_cont_nonzero_ratio`            |     99.98% |     99.998%   | same |
+| `row_sum_ks_stat`                   |      0.291 |     **0.770** | worse |
+| `col_sum_ks_stat`                   |      0.242 |     **0.773** | worse |
+| `gen_row_sum_mean` (real 0.997 / 1.572) |   67.3 |     **363.1** | worse |
+| val_loss_ema (best)                 |    0.00213 |     0.00253   | similar |
+
+Same descent profile of val_loss_ema (115× drop in both runs), same
+in-loop sample_diag oscillation between dense modes (15 km PR3b:
+2.8% → 28.7% → 87.4% → 78.6% → 12.68%; 12 km B-4C: 9.6% → 36.7% →
+99.99% → 6.5% → 68.4%) over essentially-flat val_loss — the
+val-MSE / sample-quality misalignment flagged in the 2026-05-20
+clip=100 entry above (scheme C's zero/nonzero gap is only ~0.25; noise-
+MSE rewards small-dense predictions equally to true zeros) **persists
+on a ~1.5× denser target**.
+
+The 12 km pilot improvement (4B-4B: gen/real 0.54× vs 15 km pilot
+0.31×) was real but **does not extrapolate to the medium scale** —
+the 920k-param pilot under-fits in a regime where mode-collapse-to-zero
+dominates (gen sparser than real), and the 13.34 M-param medium
+over-fits the val-MSE objective in a regime where mode-collapse-to-
+dense dominates (gen vastly denser than real). The pilot/medium
+phase transition is reproducible across thresholds.
+
+**Decision**: stop threshold tuning. The eVTOL distance cut
+(15 / 12 km, 25 min duration) and the data density it produces are
+**not** the binding constraint on Stage-4 quality; **the normalization /
+loss / sampler design is**. The 15 km tensor remains the published
+baseline (`docs/decisions.md` 2026-05-18 "low-altitude eligibility
+threshold treated as provisional baseline" — its paper-narrative role
+is unchanged). The 12 km artifacts stay on disk under the
+`*_failed_dense_debug` archive names as ablation evidence, not as
+Stage-4 deliverables.
+
+**Next-step candidate directions** (none chosen yet; gated on user
+discussion before any further training):
+
+- **A. Nonzero-aware / zero-pinned normalization** — the hybrid flagged
+  in the 2026-05-20 clip=100 entry's "Known weakness of C" note:
+  compute `mu_nz` / `sigma_nz` over nonzero log1p only, pin zeros to
+  -1.0, and raise `clip_val` (e.g. 10 or 20) so counts 5..20 stop
+  saturating. Restores the ~2.0-wide zero/nonzero gap that scheme C
+  collapses to ~0.25.
+
+- **B. Weighted loss on nonzero entries** — `docs/plan/stage4_diffusion.md`
+  §Common Pitfalls explicitly suggests `weight loss by (1 + log1p(x))`
+  to emphasize non-zero entries. Direct mitigation of "noise-MSE
+  doesn't see sparsity".
+
+- **C. Lower `guidance_scale` / guidance ablation** — the failure
+  signature ("collapsed to dense") is the dual of over-guidance pushing
+  samples *off* the zero mode. Current 2.0 may be too high for this
+  sparsity regime; sweep `{0.5, 1.0, 1.5, 2.0}` at the pilot scale on
+  a single checkpoint (no retrain).
+
+- **D. Sample-quality-based checkpoint selection / early stopping** —
+  step 4000 of the 12 km medium briefly had `row_ks=0.235, col_ks=0.162`
+  (calibrated!); step 5000 was vastly worse. val_loss_ema is the wrong
+  monitor; `gen_nonzero_ratio` proximity to real and KS magnitude are
+  the right monitors. Refactor `_save_ckpt` to select on a
+  sample-diag aggregate score rather than val_loss; bump
+  `n_samples_diag` from 16 to ~64 to cut estimator variance.
+
+- **E. Bootstrap-resampling baseline as the documented Stage-4
+  robustness fallback** — `docs/plan/stage4_diffusion.md` §Robustness
+  Note explicitly defines the fallback: *"diffusion-as-data-
+  augmentation replaced by bootstrap resampling from real OD slices
+  with conditional matching"*. The RL pipeline (Stage 5-6) runs with
+  this fallback; only the C1 innovation in CLAUDE.md §8 is downgraded.
+  Invoke if A-D fail.
+
+The decision between A-D and E is a research call, not a Stage-4
+engineering call — it depends on how much wall-clock the project has
+left and whether the C1 diffusion innovation is load-bearing for the
+target venue. Recorded here so this entry can be cited as the trigger.
+
+**Manuscript constraint** (unchanged): the manuscript continues to
+describe `15 km / 25 min` as the provisional / sensitivity-tested
+baseline (per 2026-05-18 entry). The 12 km fallback's documented failure
+at the medium architecture is itself a paper-worthy negative result —
+"sparsity is not the only failure mode of a noise-MSE DDPM on
+extremely-sparse OD data".
