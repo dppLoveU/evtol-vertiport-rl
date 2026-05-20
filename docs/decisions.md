@@ -575,3 +575,36 @@ That hybrid was not in the ablation set requested here.
 **Status**: accepted as the Stage-4B model-smoke baseline only; the
 final clip / normalization choice for the 4B production training run
 may still change after the smoke is observed.
+
+---
+
+## 2026-05-20 — Stage 4B: PyTorch CUDA 12.8 (cu128) wheel for Blackwell RTX 50-series
+
+**Context**: Stage-4B needs PyTorch. The dev laptop's GPU is an RTX
+5070 Ti (Blackwell, compute capability `(12, 0)` / sm_120, 16 GB VRAM).
+
+**Constraint**: sm_120 kernels were added in CUDA 12.8; older CUDA
+12.1/12.4 toolchains either fall back to PTX JIT (slow first launch) or
+fail outright. The official PyTorch cu128 wheel ships sm_120 kernels.
+
+**Change**:
+- Installed `torch-2.11.0+cu128` via the cu128 wheel index:
+  `pip install torch --index-url https://download.pytorch.org/whl/cu128`.
+  Pulls torch (820 MB) + triton 3.6.0 + the cu128 nvidia-* runtime
+  wheels (~1.7 GB on disk total).
+- Added `torch>=2.11` to `pyproject.toml`. `torchvision` /
+  `torchaudio` are **NOT** added — Stage 4 does not need them.
+- Verified end-to-end: `torch.cuda.is_available()` is `True`,
+  `torch.cuda.get_device_capability(0) == (12, 0)`, a 1024×1024 GPU
+  matmul + synchronize completes without errors.
+
+**Note**: the `torch>=2.11` line in `pyproject.toml` does NOT pin the
+CUDA build. A fresh `pip install -e .` on a different machine will
+default-resolve from PyPI (CUDA 12.x build on Linux, CPU on macOS).
+Anyone reproducing the project on another Blackwell box must re-run
+the explicit cu128 install command above; this is recorded here rather
+than encoded as a pin so the project stays portable to non-Blackwell
+hosts (CPU laptops, older datacenter GPUs, future architectures).
+
+**Impact**: Stage 4B and beyond can use GPU. WandB / TensorBoard are
+not affected. No other deps need pinning to CUDA versions.
