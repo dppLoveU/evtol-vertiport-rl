@@ -1131,3 +1131,151 @@ before any retrain.
 under A or B must beat **25.8 × over-dense** (the lower bound this
 posthoc sweep established, at gs=0.0) on the same checkpoint-step
 budget. Anything worse and the proposed lever is not enough.
+
+## 2026-05-20 Stage 4B-5B PR5B-3: zero-pinned normalization alone falsified
+
+**Context**: PR5B-1 (commit `78f08e6`) plumbed direction **A** ("zero-pinned
+nonzero-only normalization", scheme `zero_pinned_nonzero` on `ODDataset`)
+and the inert direction-**B** hook (`train.loss_weight` parsed but guarded
+by `NotImplementedError` until PR5B-3b). PR5B-2 (commit `3221b8d`)
+validated the wiring with a dataset smoke + 20-step train smoke under
+`configs/diffusion_12km_zpin_weighted.yaml`. PR5B-3 (this entry) ran the
+real 1000-step 12 km pilot under that same config to test the working
+hypothesis from the 2026-05-20 "Stage 4B-5A" entry — namely, that
+**zero-pinned normalization is the load-bearing lever** for the
+over-density problem, with the weighted loss (B) as a follow-up only if A
+is insufficient on its own.
+
+**Decision**: the hypothesis **"zero-pinned normalization alone is
+sufficient"** is **falsified**. Direction A is necessary-but-not-sufficient
+at the pilot architecture / step budget. The next lever **must** be
+direction **B** (weighted ε-loss on nonzero entries), tested as a
+separate **PR5B-3b** — and PR5B-3b must NOT be silently merged into
+the PR5B-3 commit, because the diagnostic value of the A-only run is
+exactly that it isolates A's contribution. **No PR5B-3b code has been
+written and no further training has been launched** — this entry only
+records what the PR5B-3 pilot proved.
+
+**Evidence**: `python -m experiments.run_stage4_train --profile pilot
+--config configs/diffusion_12km_zpin_weighted.yaml --output_suffix
+_zpin` (wall 100.5 s, RTX 5070 Ti, bfloat16 AMP, pilot profile
+max_steps=1000 / batch=4 / base=32 / mults=(1,2,4), 920 025-param
+U-Net). Effective hyperparameters at runtime: `data.scheme=
+zero_pinned_nonzero`, `data.clip_val=20.0`, `mu_nz=0.738`,
+`sigma_nz=0.151`, `diffusion.guidance_scale=1.0` (YAML override of
+profile default 2.0 verified in the runtime print block),
+`train.loss_weight=None` (PR5B-1 plumbing only — the
+`NotImplementedError` guard stayed silent against null). Splits
+240/48/48 (Mon..Fri / Sat / Sun), pad 530→544. Training stayed
+finite: train_loss 1.336 → 0.012 over 1000 steps, val_loss_ema
+monotone-decreasing 0.810 → 0.428 → 0.213 → 0.109 → **0.061** at
+step 1000 (best = final), grad_norm in [0.04, 8.86] all finite, no
+NaN/inf. End-of-run `sample_diag` (n=4, DDIM 50 steps, EMA weights,
+gs=1.0):
+
+| metric                       | PR5B-3 (zpin pilot) | real 12 km val | × real      |
+|------------------------------|---------------------|----------------|-------------|
+| gen_nonzero_ratio (rounded)  | **34.0277 %**       | 0.2642 %       | **128.8 ×** |
+| gen_cont_nonzero_ratio       | 73.96 %             | n/a            | n/a         |
+| row_sum_ks_stat              | 1.000               | 0.000          | n/a         |
+| col_sum_ks_stat              | 1.000               | 0.000          | n/a         |
+| row_sum_mean                 | 240.91              | 1.572          | ~153 ×      |
+| col_sum_mean                 | 240.91              | 1.572          | ~153 ×      |
+| gen_max (rounded)            | **34**              | (peaks in 100s)| n/a         |
+| gen_mean (rounded)           | 0.4546              | ~0.00415       | ~110 ×      |
+
+PR5B-3 acceptance gates from the plan
+(`pass: 0.05 % < gen_nonzero_ratio < 2.6 %`; `mild: 2.6 %–6.6 %`;
+`fail: > 6.6 % or < 0.05 %`): **FAIL at 34.03 %**, ~5.2 × the upper
+edge of the fail band.
+
+**Findings**:
+
+1. **Zero-pin removes the count ceiling, as predicted.** `gen_max`
+   rose from the 4B-5A ceiling-bound 10–12 (global_clip /
+   clip_val=100, narrow normalised dynamic range) to **34** under
+   the zpin scheme (mu_nz=0.738, sigma_nz=0.151, clip_val=20 admits
+   counts well past the tails in normalised space). The new ceiling
+   is closer to the real OD tail's order of magnitude than the
+   global_clip baseline managed. **This part of the A direction
+   works as designed.**
+
+2. **But mass allocation got worse, not better.** `gen_nonzero_ratio`
+   went **34.03 %** under PR5B-3 (zpin pilot, gs=1.0) vs **21.45 %**
+   under the 4B-5A no-CFG posthoc on the 4B-4C medium checkpoint
+   (global_clip, gs=1.0) — i.e. the A direction at the pilot budget
+   is **~1.6 × worse** than the no-CFG baseline at the medium budget
+   on the same gen_nonzero口径. Pilot-vs-medium architecture and
+   step-budget asymmetry partly explains this, but the **direction
+   of the gap** (zpin makes the off-zero mass problem larger, not
+   smaller) is what falsifies the "A alone is sufficient" hypothesis.
+   The continuous nonzero ratio sits at **73.96 %** before rounding,
+   meaning the model places non-trivial mass into nearly every cell;
+   only the `[-0.5, 0.5]` band collapses to 0 on `np.rint`.
+
+3. **The mechanism is consistent with the noise-MSE-on-wide-range
+   intuition.** Under the global_clip scheme the zero/nonzero gap
+   collapsed to ~0.25 in normalised space (2026-05-20 norm-ablation
+   note) and gen got "many small positives everywhere". Under zpin
+   the zero/nonzero gap is restored to ~1.0 (zeros pinned to -1.0,
+   nonzero log1p-counts standardised to mean ~0), but ε-MSE on the
+   per-pixel noise residual still has **no reason to prefer the
+   pinned -1.0 over the small-positive region**: predicting "0 cells
+   are also small-positive" is cheaper in MSE terms than predicting
+   "0 cells are exactly -1.0", because the per-cell noise variance
+   at large t dominates the bias from being off-target by O(σ). The
+   loss landscape needs an explicit per-pixel weight that punishes
+   mis-predictions in the pinned-zero region harder than the
+   nonzero region — i.e., direction **B**.
+
+4. **No safety regression.** Training stayed finite throughout, AMP
+   bfloat16 stayed stable, GPU peak (5 428.8 MB allocated /
+   5 809.1 MB reserved on a 12 929 MB card) was nowhere near OOM,
+   wall (100.5 s) sits well inside the 10–20 min pilot budget, the
+   two existing baseline `norm_stats` caches (`od_norm_stats.json`,
+   `od_norm_stats_12km.json`) were not overwritten (the zpin cache
+   landed at the separate path `data/processed/od_norm_stats_12km_zpin.json`
+   per the PR5B-1 plan), and no `data/synthetic/od_samples.npy` was
+   written. The failure is purely a sample-distribution failure, not
+   an infra failure — A is safe to keep wired (it doesn't break the
+   training loop or the dataset), but it is not sufficient on its
+   own.
+
+**What changes in code (gated on user go-ahead, NOT applied yet)**:
+
+- `GaussianDiffusion.training_loss` must accept a per-pixel weight
+  map and apply it elementwise to the ε-MSE residual before the
+  per-sample mean. The weight map is computed from the raw
+  (unnormalised) integer counts using e.g.
+  `weight = alpha + beta * log1p(count)` so nonzero entries get a
+  boost proportional to log-count and zero entries get a baseline
+  weight; the exact `(alpha, beta)` schema is what PR5B-3b will
+  pick from the `train.loss_weight` block already plumbed in PR5B-1.
+- `experiments/run_stage4_train.py` must forward the raw counts
+  through the dataset → loader → diffusion path (currently only the
+  normalised float tensor is forwarded), and remove the
+  `NotImplementedError` guard once the weight map flows end-to-end.
+- The dataset class itself does NOT need to change — `ODDataset`
+  already retains the raw integer slice it converts from; PR5B-3b
+  just needs to expose it through the `__getitem__` tuple.
+
+**Falsification target for PR5B-3b**: a 1000-step pilot under the same
+`configs/diffusion_12km_zpin_weighted.yaml` config with `train.loss_weight`
+populated must move `gen_nonzero_ratio` **strictly below 21.45 %**
+(the 4B-5A no-CFG posthoc lower bound on the global_clip medium ckpt) at
+the **pilot** architecture/budget. Anything ≥ 21.45 % means the weighted
+loss is not enough on its own at the pilot scale and the medium-budget
+retrain decision needs separate justification. The PR5B-3b acceptance
+band carries over from PR5B-3 unchanged
+(`pass: 0.05 % < gen_nonzero_ratio < 2.6 %`; `mild: 2.6 %–6.6 %`;
+`fail: > 6.6 % or < 0.05 %`).
+
+**Explicit non-actions in this commit**: PR5B-3b code is **not**
+written, the `NotImplementedError` guard in `experiments/run_stage4_train.py`
+is **left armed**, no new training is launched, no medium run, no Stage
+4C entry, no `od_samples.npy`, no `models/diffusion_od_pilot_zpin/` files
+staged. This commit archives only the failed-diagnostic artifacts under
+`results/stage4/train_pilot_zpin/` (plots, metrics.json, train_log.jsonl)
+plus this `docs/decisions.md` entry and the matching `docs/progress.md`
+line. The PR5B-3b plumbing change is a deliberately separate PR so that
+the A-only failure stays attributable on its own.
