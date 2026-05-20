@@ -14,8 +14,11 @@ import pytest
 from src.data.od_dataset import (
     ODDataset,
     apply_norm,
+    apply_norm_zero_pinned,
     compute_norm_stats,
+    compute_norm_stats_nonzero,
     inverse_norm,
+    inverse_norm_zero_pinned,
     load_norm_stats,
     next_pad_size,
     pad_hw,
@@ -235,3 +238,152 @@ def test_rejects_bad_split(od_files: tuple[Path, Path]) -> None:
     od_path, meta_path = od_files
     with pytest.raises(ValueError):
         ODDataset(od_path, meta_path, "validation")
+
+
+# --- Stage 4B-5B: zero_pinned_nonzero scheme ------------------------------
+
+
+_ZPIN_STATS = {
+    "mu_nz": 0.7,
+    "sigma_nz": 0.13,
+    "clip_val": 20.0,
+    "scheme": "zero_pinned_nonzero",
+}
+
+
+def test_zpin_apply_norm_pins_zero_to_minus_one() -> None:
+    raw = np.array([[0, 1, 5], [0, 20, 0]], dtype=np.int32)
+    x = apply_norm_zero_pinned(raw, _ZPIN_STATS)
+    assert x.shape == raw.shape
+    assert x.dtype == np.float32
+    # Every raw-zero entry lands at exactly -1.0.
+    assert np.all(x[raw == 0] == -1.0)
+    # Every raw-nonzero entry sits strictly above -1.0 (and well above
+    # the -0.5 inverse threshold under realistic stats).
+    assert np.all(x[raw > 0] > -1.0)
+    assert np.all(x[raw > 0] > -0.5)
+
+
+def test_zpin_inverse_restores_zero_exactly() -> None:
+    x = np.full((4, 4), -1.0, dtype=np.float32)
+    back = inverse_norm_zero_pinned(x, _ZPIN_STATS)
+    assert np.all(back == 0.0)
+
+
+def test_zpin_roundtrip_small_counts() -> None:
+    raw = np.array([0, 1, 5, 20], dtype=np.float64)
+    x = apply_norm_zero_pinned(raw, _ZPIN_STATS)
+    back = inverse_norm_zero_pinned(x, _ZPIN_STATS)
+    # Zero is restored exact; small nonzero counts within rounding.
+    assert back[0] == 0.0
+    np.testing.assert_allclose(back[1:], raw[1:], rtol=1e-4, atol=1e-3)
+
+
+def test_zpin_inverse_is_nonnegative() -> None:
+    grid = np.linspace(-1.0, 1.0, 200)
+    out = inverse_norm_zero_pinned(grid, _ZPIN_STATS)
+    assert np.all(out >= 0.0)
+    assert np.all(np.isfinite(out))
+
+
+def test_compute_norm_stats_nonzero_matches_numpy(
+    od_files: tuple[Path, Path],
+) -> None:
+    od_path, _ = od_files
+    od = np.load(od_path)
+    train_slots = range(0, 9 * 48)
+    stats = compute_norm_stats_nonzero(od, train_slots, clip_val=20.0)
+    train_block = od[: 9 * 48]
+    nz = train_block[train_block > 0].astype(np.float64)
+    ref = np.log1p(nz)
+    assert stats["mu_nz"] == pytest.approx(float(ref.mean()))
+    assert stats["sigma_nz"] == pytest.approx(float(ref.std()))
+    assert stats["clip_val"] == 20.0
+    assert stats["scheme"] == "zero_pinned_nonzero"
+
+
+def test_dataset_zpin_scheme_padding_and_pin(od_files: tuple[Path, Path]) -> None:
+    od_path, meta_path = od_files
+    ds = ODDataset(
+        od_path, meta_path, "train",
+        scheme="zero_pinned_nonzero", clip_val=20.0,
+    )
+    assert ds.scheme == "zero_pinned_nonzero"
+    assert ds.norm_stats["scheme"] == "zero_pinned_nonzero"
+    assert "mu_nz" in ds.norm_stats and "sigma_nz" in ds.norm_stats
+
+    x, _ = ds[0]
+    assert x.shape == (1, 16, 16)
+    raw = np.load(od_path)[0]
+    # Inside the Z x Z region, zero entries are pinned at -1.0.
+    inside = x[0, :Z, :Z]
+    assert np.all(inside[raw == 0] == -1.0)
+    # Padded region (rows/cols Z..pad-1) is all -1.0.
+    assert np.all(x[:, Z:, :] == -1.0)
+    assert np.all(x[:, :, Z:] == -1.0)
+
+
+def test_dataset_zpin_inverse_round_trip(od_files: tuple[Path, Path]) -> None:
+    od_path, meta_path = od_files
+    ds = ODDataset(
+        od_path, meta_path, "train",
+        scheme="zero_pinned_nonzero", clip_val=20.0,
+    )
+    x, _ = ds[10]
+    back = ds.inverse_transform(x)
+    raw = np.load(od_path)[10].astype(np.float64)
+    assert back.shape == (1, Z, Z)
+    # Zero entries restored to exact 0; nonzero entries within tight
+    # tolerance (synthetic counts are small, far below the clip ceiling).
+    assert np.all(back[0][raw == 0] == 0.0)
+    nz_mask = raw > 0
+    if nz_mask.any():
+        np.testing.assert_allclose(
+            back[0][nz_mask], raw[nz_mask], rtol=1e-4, atol=1e-3
+        )
+
+
+def test_dataset_rejects_unknown_scheme(od_files: tuple[Path, Path]) -> None:
+    od_path, meta_path = od_files
+    with pytest.raises(ValueError):
+        ODDataset(od_path, meta_path, "train", scheme="not_a_scheme")
+
+
+def test_dataset_scheme_mismatch_in_norm_stats(
+    od_files: tuple[Path, Path],
+) -> None:
+    """If norm_stats carries an explicit scheme tag it must match."""
+    od_path, meta_path = od_files
+    zpin_stats = {
+        "mu_nz": 0.7, "sigma_nz": 0.13, "clip_val": 20.0,
+        "scheme": "zero_pinned_nonzero",
+    }
+    with pytest.raises(ValueError):
+        ODDataset(
+            od_path, meta_path, "val",
+            scheme="global_clip", norm_stats=zpin_stats,
+        )
+
+
+def test_norm_stats_json_preserves_scheme_tag(tmp_path: Path) -> None:
+    # save+load preserves the scheme tag and the scheme-specific keys
+    # for both schemes, and the two scheme caches occupy distinct files.
+    stats_g = {"mu": 0.1, "sigma": 0.2, "clip_val": 100.0, "scheme": "global_clip"}
+    stats_z = {
+        "mu_nz": 0.7, "sigma_nz": 0.13, "clip_val": 20.0,
+        "scheme": "zero_pinned_nonzero",
+    }
+    p_g = tmp_path / "stats_global.json"
+    p_z = tmp_path / "stats_zpin.json"
+    save_norm_stats(stats_g, p_g)
+    save_norm_stats(stats_z, p_z)
+    # Distinct files (mtime / inode irrelevant here, just contents).
+    loaded_g = load_norm_stats(p_g)
+    loaded_z = load_norm_stats(p_z)
+    assert loaded_g["scheme"] == "global_clip"
+    assert loaded_z["scheme"] == "zero_pinned_nonzero"
+    assert loaded_g["mu"] == pytest.approx(0.1)
+    assert loaded_z["mu_nz"] == pytest.approx(0.7)
+    # Cross-scheme keys do not appear in the wrong file.
+    assert "mu_nz" not in loaded_g
+    assert "mu" not in loaded_z

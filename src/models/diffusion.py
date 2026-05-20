@@ -92,6 +92,7 @@ class GaussianDiffusion(nn.Module):
         is_weekend: torch.Tensor,
         t: torch.Tensor | None = None,
         cond_dropout_prob: float = 0.0,
+        weight_map: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Standard MSE-on-epsilon DDPM loss.
 
@@ -101,6 +102,16 @@ class GaussianDiffusion(nn.Module):
         2022). The model thus learns both conditional and unconditional
         noise estimates from a single set of weights. The default ``0.0``
         keeps the original Stage 4B-1/4B-2 behaviour.
+
+        ``weight_map`` (Stage 4B-5B plumbing): optional per-pixel weight
+        tensor broadcastable to ``pred``. When ``None`` (default) the
+        loss is exactly ``F.mse_loss(pred, noise)`` -- bit-equal to the
+        pre-PR5B-1 behaviour. When provided the loss becomes
+        ``(weight_map * (pred - noise) ** 2).mean()``. The caller is
+        responsible for normalising ``weight_map`` (e.g. dividing by
+        ``weight_map.mean()``) so the loss magnitude stays comparable
+        to the unweighted case. PR5B-1 only exposes the parameter --
+        the training script still passes ``None``.
         """
         b = x0.shape[0]
         if t is None:
@@ -112,7 +123,9 @@ class GaussianDiffusion(nn.Module):
         if cond_dropout_prob > 0.0:
             cond_drop_mask = torch.rand(b, device=x0.device) < cond_dropout_prob
         pred = model(x_t, t, hour, dow, is_weekend, cond_drop_mask=cond_drop_mask)
-        return F.mse_loss(pred, noise)
+        if weight_map is None:
+            return F.mse_loss(pred, noise)
+        return (weight_map * (pred - noise) ** 2).mean()
 
     # --- sampling ---
 

@@ -245,6 +245,77 @@ def test_ddim_sample_guidance_one_matches_no_arg(unet: UNetOD, cond: tuple) -> N
     assert torch.equal(out_default, out_g1)
 
 
+# --- Stage 4B-5B: weighted-loss plumbing ----------------------------------
+
+
+def test_training_loss_weight_map_none_matches_default(
+    unet: UNetOD, cond: tuple
+) -> None:
+    """weight_map=None must be bit-equal to the pre-PR5B-1 F.mse_loss path."""
+    diff = GaussianDiffusion(num_train_timesteps=100)
+    x0 = torch.randn(B, C, H, W)
+    t = torch.tensor([10, 50], dtype=torch.long)
+    torch.manual_seed(0)
+    loss_default = diff.training_loss(unet, x0, *cond, t=t)
+    torch.manual_seed(0)
+    loss_none = diff.training_loss(unet, x0, *cond, t=t, weight_map=None)
+    assert torch.equal(loss_default, loss_none)
+
+
+def test_training_loss_weight_ones_is_close_to_unweighted(
+    unet: UNetOD, cond: tuple
+) -> None:
+    """A uniform ones weight produces ~unweighted MSE (modulo float fma)."""
+    diff = GaussianDiffusion(num_train_timesteps=100)
+    x0 = torch.randn(B, C, H, W)
+    t = torch.tensor([10, 50], dtype=torch.long)
+    weight = torch.ones_like(x0)
+    torch.manual_seed(0)
+    loss_unweighted = diff.training_loss(unet, x0, *cond, t=t)
+    torch.manual_seed(0)
+    loss_weighted = diff.training_loss(unet, x0, *cond, t=t, weight_map=weight)
+    assert torch.isfinite(loss_weighted)
+    assert torch.allclose(loss_weighted, loss_unweighted, atol=1e-6, rtol=1e-6)
+
+
+def test_training_loss_nonuniform_weight_backward(
+    unet: UNetOD, cond: tuple
+) -> None:
+    """A non-uniform mean-normalised weight produces a finite scalar loss
+    whose gradient flows back through the model."""
+    diff = GaussianDiffusion(num_train_timesteps=100)
+    x0 = torch.randn(B, C, H, W)
+    t = torch.tensor([10, 50], dtype=torch.long)
+    weight = torch.full_like(x0, 0.5)
+    weight[:, :, : H // 2, : W // 2] = 5.0
+    weight = weight / weight.mean()  # normalise so loss magnitude is comparable
+    loss = diff.training_loss(unet, x0, *cond, t=t, weight_map=weight)
+    assert loss.ndim == 0
+    assert torch.isfinite(loss)
+    loss.backward()
+    g_total = sum(
+        p.grad.abs().sum() for p in unet.parameters() if p.grad is not None
+    )
+    assert torch.isfinite(g_total)
+    assert g_total > 0
+
+
+def test_training_loss_weight_map_changes_loss_value(
+    unet: UNetOD, cond: tuple
+) -> None:
+    """A non-uniform weight must change the scalar loss value vs unweighted."""
+    diff = GaussianDiffusion(num_train_timesteps=100)
+    x0 = torch.randn(B, C, H, W)
+    t = torch.tensor([10, 50], dtype=torch.long)
+    weight = torch.full_like(x0, 0.5)
+    weight[:, :, : H // 2, : W // 2] = 5.0  # not mean-normalised here
+    torch.manual_seed(0)
+    loss_unw = diff.training_loss(unet, x0, *cond, t=t)
+    torch.manual_seed(0)
+    loss_w = diff.training_loss(unet, x0, *cond, t=t, weight_map=weight)
+    assert not torch.allclose(loss_unw, loss_w, atol=1e-4)
+
+
 # --- checkpoint round-trip (Stage 4B-2 smoke) -----------------------------
 
 

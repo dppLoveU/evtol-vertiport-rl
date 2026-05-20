@@ -484,6 +484,31 @@ def main() -> None:
     seed = args.seed if args.seed is not None else int(cfg["seed"])
     _set_seed(seed)
 
+    # YAML diffusion.guidance_scale (if present) overrides the PROFILE
+    # default. Existing configs/diffusion*.yaml carry guidance_scale=2.0
+    # which matches the profile default; the Stage 4B-5B
+    # configs/diffusion_12km_zpin_weighted.yaml carries 1.0 (4B-5A
+    # finding) and takes effect here.
+    yaml_diffusion = cfg.get("diffusion") or {}
+    if "guidance_scale" in yaml_diffusion:
+        profile["guidance_scale"] = float(yaml_diffusion["guidance_scale"])
+
+    # train.loss_weight is plumbed in PR5B-1 but not yet enabled. When
+    # set to anything other than null/None the script refuses to run --
+    # wiring (raw counts -> weight_map -> training_loss) lands in
+    # PR5B-3b.
+    yaml_loss_weight = (cfg.get("train") or {}).get("loss_weight", None)
+    if yaml_loss_weight is not None:
+        raise NotImplementedError(
+            "train.loss_weight is plumbed but not yet enabled "
+            "(Stage 4B-5B PR5B-1). Got "
+            f"{yaml_loss_weight!r}; expected null. The raw-count -> "
+            "weight_map wiring lands in PR5B-3b."
+        )
+
+    # Normalization scheme: "global_clip" (default) or "zero_pinned_nonzero".
+    data_scheme = (cfg.get("data") or {}).get("scheme", "global_clip")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     amp_enabled = bool(cfg["train"]["amp"]) and device.type == "cuda"
     amp_dtype = torch.bfloat16  # see docs/decisions.md 2026-05-20
@@ -518,6 +543,8 @@ def main() -> None:
     print(f"  results_dir         : {out_dir}")
     print(f"  resume              : {args.resume}")
     print(f"  seed                : {seed}")
+    print(f"  data.scheme         : {data_scheme}")
+    print(f"  loss_weight (cfg)   : {yaml_loss_weight}  (plumbing only, not enabled)")
     print(f"  profile             :")
     for k, v in profile.items():
         print(f"    {k:<22}: {v}")
@@ -530,12 +557,14 @@ def main() -> None:
         window=cfg["data"]["window"],
         pad_multiple=cfg["data"]["pad_multiple"],
         clip_val=cfg["data"]["clip_val"],
+        scheme=data_scheme,
         split_cfg=cfg["data"]["split"],
     )
     val_base = ODDataset(
         od_path, meta_path, "val",
         window=cfg["data"]["window"],
         pad_multiple=cfg["data"]["pad_multiple"],
+        scheme=data_scheme,
         norm_stats=train_base.norm_stats,
         split_cfg=cfg["data"]["split"],
     )
