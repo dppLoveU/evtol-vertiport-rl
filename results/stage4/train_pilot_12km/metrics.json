@@ -1,0 +1,51 @@
+{
+  "profile": "pilot",
+  "max_steps": 1000,
+  "final_val_loss_ema": 0.025931054415802162,
+  "best_val_loss_ema": 0.025931054415802162,
+  "train_loss_last": 0.0028981759678572416,
+  "eval_history": [
+    {
+      "step": 200.0,
+      "val_loss_ema": 0.778645267089208
+    },
+    {
+      "step": 400.0,
+      "val_loss_ema": 0.3458076665798823
+    },
+    {
+      "step": 600.0,
+      "val_loss_ema": 0.13753688521683216
+    },
+    {
+      "step": 800.0,
+      "val_loss_ema": 0.05498197643707196
+    },
+    {
+      "step": 1000.0,
+      "val_loss_ema": 0.025931054415802162
+    }
+  ],
+  "final_sample_diag": {
+    "real_nonzero_ratio": 0.0026415094339622643,
+    "gen_nonzero_ratio": 0.0014364542541829832,
+    "real_row_sum_mean": 1.5723270440251573,
+    "real_row_sum_std": 3.3485594753130594,
+    "gen_row_sum_mean": 0.7839622641509434,
+    "gen_row_sum_std": 3.7573233345142705,
+    "real_col_sum_mean": 1.5723270440251573,
+    "real_col_sum_std": 4.377611162555039,
+    "gen_col_sum_mean": 0.7839622641509434,
+    "gen_col_sum_std": 7.997318380657035,
+    "row_sum_ks_stat": 0.19076257861635226,
+    "col_sum_ks_stat": 0.20876572327044018,
+    "gen_min": 0.0,
+    "gen_max": 5.0,
+    "gen_mean": 0.0014791740833036667,
+    "gen_cont_nonzero_ratio": 0.2750872196511214,
+    "gen_cont_min": 0.0,
+    "gen_cont_max": 4.5249985827972665,
+    "gen_cont_mean": 0.020183103179642156
+  },
+  "wall_time_s": 107.84745836257935
+}
