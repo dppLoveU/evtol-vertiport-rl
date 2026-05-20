@@ -799,3 +799,145 @@ first acceptance datapoint.
 itself is unchanged (the function operates on whatever array is passed
 in; rounding is the caller's responsibility); all 13 `test_metrics_dist`
 tests still pass.
+
+---
+
+## 2026-05-20 — Stage 4B-4: 12 km eVTOL fallback activated as an independent scenario
+
+**Trigger**: the 15 km medium 5000-step run (`progress.md` 2026-05-20 PR3b)
+mode-collapsed to dense — `gen_nonzero_ratio = 12.68%` vs real-val
+`0.1729%` (~73× over-dense), with `gen_row_sum_mean ≈ 67×` real and val
+noise-MSE misaligned with sample quality on the 0.117%-sparse target.
+This is the failure mode the 12 km fallback was designated for in the
+2026-05-18 entry above ("Stage 3: low-altitude eligibility threshold
+treated as provisional baseline"; 12 km share 7.98% vs 15 km 5.19%,
+~1.54× denser). Stage 4B-4A invokes that fallback.
+
+**Status**: 12 km is a **fallback / robustness scenario**, NOT a new
+ground-truth standard or a replacement for the 15 km baseline. The 15 km
+baseline files (`data/processed/od_evtol.npy`, `od_evtol_weighted.npy`,
+`od_full.npy`, `od_meta.json`, `od_norm_stats.json`) and the 15 km
+diffusion config (`configs/diffusion.yaml`) remain authoritative and
+untouched. The paper-writing constraint from the 2026-05-18 threshold
+entry still applies: the `15 km / 25 min` cut stays the
+threshold-based-proxy baseline; 12 km is the sensitivity-tested
+alternative documented as the densification path under sparsity failure.
+
+**Change** (config + data only — no code touched):
+
+1. **New config** `configs/od_12km.yaml` — sibling of `configs/od.yaml`;
+   differs in exactly two places:
+   - `evtol_filter.min_dist_km: 15.0 → 12.0` (everything else, including
+     `min_duration_min: 25.0`, `drop_intra_zone: true`, the 11-day window,
+     `time_bin_min: 30`, `num_time_bins: 528`, and `weight.column:
+     fare_yuan`, is identical so 12 km vs 15 km is an apples-to-apples
+     ablation);
+   - `output:` block — every path gains a `_12km` suffix
+     (`od_full_12km.npy`, `od_evtol_12km.npy`,
+     `od_evtol_weighted_12km.npy`, `od_meta_12km.json`).
+
+2. **New config** `configs/diffusion_12km.yaml` — sibling of
+   `configs/diffusion.yaml`; differs in exactly three places:
+   - `input.od_path → data/processed/od_evtol_12km.npy`,
+   - `input.meta_path → data/processed/od_meta_12km.json`,
+   - `data.norm_stats_path → data/processed/od_norm_stats_12km.json`
+     (the 15 km cache `od_norm_stats.json` is preserved).
+
+   `clip_val=100.0`, `pad_multiple=16`, `data.split [0,5]/[5,6]/[6,7]`,
+   profile table (pilot/medium/full), `model`/`diffusion`/`train`/`sample`
+   sections are bit-identical to the 15 km baseline — the 12 km run is a
+   threshold-only ablation; no other knob moves.
+
+3. **Stage-3 build** (`python -m experiments.run_stage3_build --config
+   configs/od_12km.yaml`, 13.0 s wall, FULL mode):
+
+   ```
+   n_orders_total            : 4 050 523
+   n_time_in_range           : 4 050 501
+   n_zone_assigned           : 3 637 645   (zone drop_rate 10.19%, same as 15 km)
+   evtol_trip_count          :   290 160
+   evtol_share               :    7.9766%   (==  0.0798 sensitivity sweep, within [0.03, 0.20])
+   od_full          [528, 530, 530] int32   sum 3 637 645  nz 1 837 574  ratio 1.239%
+   od_evtol         [528, 530, 530] int32   sum   290 160  nz   258 358  ratio 0.1742%
+   od_evtol_weighted[528, 530, 530] float32 sum 19 777 814 nz   258 358  ratio 0.1742%
+   diagonal == 0, no NaN, no negative -> all acceptance checks PASS
+   ```
+
+   For comparison the 15 km baseline reported `evtol_trip_count = 188 699`,
+   `evtol_share = 5.19%`, `od_evtol` nonzero `173 264 (0.117%)`. 12 km is
+   therefore **~1.54× more eVTOL trips, ~1.49× higher nonzero ratio**.
+
+   `evtol_share == 0.0798` matches the 2026-05-18 R3 sensitivity-sweep
+   row (`12 km → 7.98%`) to 4 dp, confirming the 12 km tensor is
+   consistent with the previously-measured threshold curve.
+
+4. **Per-day occupancy** (`od_evtol_12km.npy` raw int counts):
+
+   ```
+   day   slots             nonzero      sum    max
+     0   [  0,  48)          36 656   40 905    11    Mon  ← train
+     1   [ 48,  96)          38 190   42 663    17    Tue  ← train
+     2   [ 96, 144)          37 346   41 860    11    Wed  ← train
+     3   [144, 192)          37 369   41 685    16    Thu  ← train
+     4   [192, 240)          39 852   45 279    11    Fri  ← train
+     5   [240, 288)          35 616   40 000    19    Sat  ← val
+     6   [288, 336)          33 272   37 710     9    Sun  ← test
+     7   [336, 384)              56       57     2    Mon  ← tail
+     8   [384, 432)               1        1     1    Tue  ← effectively empty
+     9   [432, 480)               0        0     0    Wed  ← empty
+    10   [480, 528)               0        0     0    Thu  ← empty
+   ```
+
+   Same active-day pattern as the 15 km baseline (`progress.md` 2026-05-20
+   per-day table): days 0–6 carry essentially all signal; day 7 is a
+   small residual tail (56 nonzeros, was 40 at 15 km — minor uptick under
+   the looser threshold); day 8 has 1 nonzero (was 0); days 9–10 still
+   empty. The `data/processed/orders_clean.parquet` timestamp span runs
+   through 2023-07-21 18:25 but the eVTOL OD signal continues to be
+   concentrated in days 0–6 regardless of the distance threshold — this
+   is a property of the order distribution, not of the 15 km cut.
+
+5. **Split retained**: `configs/diffusion_12km.yaml::data.split` keeps
+   the 15 km baseline's `[0,5] / [5,6] / [6,7]` (Mon–Fri train, Sat val,
+   Sun test). Per-split raw-int nonzero confirmation on the 12 km tensor:
+
+   ```
+   train: 240 slices, 189 413 nonzero, sum 212 392, max 17, ratio 0.2810%
+   val  :  48 slices,  35 616 nonzero, sum  40 000, max 19, ratio 0.2642%
+   test :  48 slices,  33 272 nonzero, sum  37 710, max  9, ratio 0.2468%
+   ```
+
+   All three splits non-empty; 12 km ratios are ~1.5× the 15 km
+   counterparts (train 0.1897% → 0.2810%, val 0.1729% → 0.2642%, test
+   0.1634% → 0.2468%). The weekend-only val/test caveat carried over
+   from the 2026-05-20 split-revision entry above still applies.
+
+6. **Dataset smoke** (`python -m experiments.run_stage4_dataset_smoke
+   --config configs/diffusion_12km.yaml`):
+   - splits `train/val/test = 240/48/48` (identical to 15 km),
+   - `pad_size = 544` (530 → 544, same as 15 km),
+   - **train norm stats** `mu = 0.002074, sigma = 0.039875, clip_val =
+     100.0` (15 km baseline was `mu = 0.001378, sigma = 0.032088` — both
+     larger because the 12 km tensor is denser, but neither saturates
+     under `clip_val = 100`),
+   - normalized `train[0]` range `[-0.0005, 0.2750]` (within `[-1, 1]`,
+     not clip-bound),
+   - inverse round-trip `max|err| = 0.0000` on `train[10]`,
+   - conditions `train[0] = Mon hour 0` (`day_of_week=0, is_weekend=0`),
+     `val[0] = Sat`, `test[0] = Sun` — all correct under the new dataset.
+   - Stats cached to `data/processed/od_norm_stats_12km.json` (15 km
+     cache `od_norm_stats.json` left intact).
+
+**Hard-separation verification**:
+- `data/processed/od_*.npy` (15 km) and `od_meta.json` mtimes unchanged
+  since 2026-05-18 20:00; `od_norm_stats.json` mtime unchanged since the
+  2026-05-20 16:40 clip=100 re-cache.
+- New 12 km files: `od_full_12km.npy`, `od_evtol_12km.npy`,
+  `od_evtol_weighted_12km.npy`, `od_meta_12km.json`,
+  `od_norm_stats_12km.json` — all written today (2026-05-20).
+
+**Not done** (gated on user go-ahead): pilot/medium training on the 12 km
+tensor; `od_samples.npy` generation; Stage-4C entry. The first 12 km
+acceptance datapoint will be a pilot run at
+`models/diffusion_od_pilot_12km/` (see CLI in
+`configs/diffusion_12km.yaml` header).

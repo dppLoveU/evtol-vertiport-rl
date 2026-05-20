@@ -1,0 +1,59 @@
+# Stage-3 OD tensor construction config -- 12 km eVTOL fallback scenario.
+#
+# Sibling of `configs/od.yaml` (15 km baseline). Switches the eVTOL
+# distance threshold to 12 km and writes to `*_12km.npy` /
+# `od_meta_12km.json` so the 15 km baseline files in `data/processed/`
+# are never overwritten. See docs/decisions.md 2026-05-18 (12 km
+# designated fallback) and docs/decisions.md 2026-05-20 (Stage 4B-4
+# invocation of the fallback).
+#
+# Loaded by experiments/run_stage3_*.py via `--config configs/od_12km.yaml`.
+
+seed: 42
+
+input:
+  orders_path: data/processed/orders_clean.parquet
+  zones_path: data/processed/zones.geojson
+
+time:
+  # Identical to the 15 km baseline -- same 11-day window, same 30-min
+  # bins, T = 528 slots. The threshold-only fallback must keep every
+  # other Stage-3 parameter unchanged so 12 km vs 15 km is an
+  # apples-to-apples ablation.
+  start_datetime: "2023-07-10 00:00:00"
+  end_datetime: "2023-07-21 00:00:00"
+  time_bin_min: 30
+  num_time_bins: 528
+
+evtol_filter:
+  # ---------------------------------------------------------------------
+  # CHANGED vs configs/od.yaml: min_dist_km 15.0 -> 12.0.
+  # Sensitivity sweep (docs/progress.md 2026-05-18 R3) measured
+  # eligible_share_of_zone_assigned = 7.98% at 12 km (vs 5.19% at 15 km),
+  # giving a ~1.54x denser eVTOL OD tensor -- the documented fallback for
+  # the 15 km tensor's mode-collapse-to-dense failure in PR3b.
+  # ---------------------------------------------------------------------
+  min_dist_km: 12.0
+  min_duration_min: 25.0
+  drop_intra_zone: true
+
+weight:
+  column: fare_yuan
+
+output:
+  # ---------------------------------------------------------------------
+  # CHANGED vs configs/od.yaml: all four output paths get the _12km
+  # suffix so the 15 km files (od_full.npy / od_evtol.npy /
+  # od_evtol_weighted.npy / od_meta.json) are NOT overwritten.
+  # ---------------------------------------------------------------------
+  od_full_path: data/processed/od_full_12km.npy
+  od_evtol_path: data/processed/od_evtol_12km.npy
+  od_evtol_weighted_path: data/processed/od_evtol_weighted_12km.npy
+  meta_path: data/processed/od_meta_12km.json
+
+eda:
+  output_dir: results/stage3/eda     # not used by the 12 km build; kept for parity
+
+sensitivity:
+  dist_km_sweep: [10.0, 12.0, 15.0, 18.0, 20.0]
+  output_path: results/stage3/sensitivity.csv

@@ -1,0 +1,93 @@
+# Stage-4 diffusion model config -- 12 km eVTOL fallback scenario.
+#
+# Sibling of `configs/diffusion.yaml` (15 km baseline). Points at the
+# 12 km OD tensor written by `configs/od_12km.yaml` and caches norm
+# stats to a separate file so the 15 km baseline's
+# `data/processed/od_norm_stats.json` is never overwritten.
+#
+# Loaded by experiments/run_stage4_*.py via
+# `--config configs/diffusion_12km.yaml`. Selected via training:
+#   python -m experiments.run_stage4_train \
+#       --profile pilot \
+#       --config configs/diffusion_12km.yaml \
+#       --output_suffix _12km
+# which writes to models/diffusion_od_pilot_12km/ and
+# results/stage4/train_pilot_12km/ (siblings of the 15 km runs).
+#
+# Stage 4B-3 training profiles unchanged from configs/diffusion.yaml
+# (pilot / medium / full). All knobs other than the three input paths
+# below are identical to the 15 km baseline so 12 km vs 15 km is an
+# apples-to-apples ablation.
+
+seed: 42
+
+input:
+  # ---------------------------------------------------------------------
+  # CHANGED vs configs/diffusion.yaml: 12 km OD tensor + meta.
+  # ---------------------------------------------------------------------
+  od_path: data/processed/od_evtol_12km.npy
+  meta_path: data/processed/od_meta_12km.json
+
+data:
+  window: 1
+
+  pad_multiple: 16
+
+  # log1p + global mu/sigma + clip + scale-to-[-1,1]. clip_val 100.0
+  # adopted from the Stage 4B-0 normalization ablation; the SAME clip
+  # value is used here even though the 12 km tensor is denser, so the
+  # 15 km vs 12 km comparison is not confounded by a normalization
+  # change. If 12 km changes the optimal clip, a follow-up ablation
+  # will document it.
+  clip_val: 100.0
+  # ---------------------------------------------------------------------
+  # CHANGED vs configs/diffusion.yaml: 12 km-scenario norm stats live
+  # in their own JSON file so the 15 km cache is preserved.
+  # ---------------------------------------------------------------------
+  norm_stats_path: data/processed/od_norm_stats_12km.json
+
+  # Provisional split -- mirrors the 15 km baseline. The
+  # "days 8-10 are empty" finding in docs/decisions.md 2026-05-20 was
+  # measured on the 15 km tensor. Source orders span only up to
+  # 2023-07-21 18:25, so days 8-10 should remain empty at 12 km too;
+  # day 7 (40-nonzero tail at 15 km) may pick up more mass under the
+  # looser threshold. Per-day occupancy will be checked on the
+  # 12 km tensor immediately after Stage-3 build; if the active-day
+  # set changes, this split will be revised before any 12 km training.
+  split:
+    train_days: [0, 5]    # Mon..Fri   -> slots 0..239
+    val_days:   [5, 6]    # Sat        -> slots 240..287
+    test_days:  [6, 7]    # Sun        -> slots 288..335
+
+model:
+  base_channels: 16
+  channel_mults: [1, 2, 4]
+  num_res_blocks: 1
+  time_emb_dim: 128
+  cond_dropout_prob: 0.1
+
+diffusion:
+  num_train_timesteps: 1000
+  beta_schedule: cosine
+  num_inference_steps: 50
+  guidance_scale: 2.0
+
+train:
+  batch_size: 1
+  steps: 10
+  lr: 2.0e-4
+  weight_decay: 0.0
+  grad_clip: 1.0
+  ema_decay: 0.9999
+  amp: true
+  eval_every: 5
+  ckpt_dir: results/stage4/smoke/ckpt
+
+sample:
+  n_omega: 64
+  od_samples_path: data/synthetic/od_samples.npy
+  od_samples_agg_path: data/synthetic/od_samples_agg.npy
+
+logging:
+  backend: tb
+  project: evtol-vertiport
