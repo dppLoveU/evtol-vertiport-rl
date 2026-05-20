@@ -1,0 +1,184 @@
+"""DDPM wrapper + DDIM sampler for the Stage-4B OD diffusion model.
+
+Minimal implementation built around an epsilon-prediction U-Net (see
+``unet_od.py``). The defaults (``num_train_timesteps=100``) are SMOKE
+defaults; production runs will use ``num_train_timesteps=1000`` from
+``configs/diffusion.yaml::diffusion``.
+
+Schedules are stored as ``register_buffer`` tensors so ``.to(device)``
+moves them along with the wrapping ``nn.Module``.
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+def _cosine_betas(num_steps: int, s: float = 0.008) -> torch.Tensor:
+    """Cosine beta schedule from Nichol & Dhariwal 2021."""
+    steps = num_steps + 1
+    x = torch.linspace(0, num_steps, steps, dtype=torch.float64)
+    f = torch.cos(((x / num_steps) + s) / (1.0 + s) * math.pi * 0.5) ** 2
+    alphas_cumprod = f / f[0]
+    betas = 1.0 - alphas_cumprod[1:] / alphas_cumprod[:-1]
+    return torch.clip(betas, 1e-4, 0.999).to(torch.float32)
+
+
+def _linear_betas(num_steps: int) -> torch.Tensor:
+    return torch.linspace(1e-4, 0.02, num_steps, dtype=torch.float32)
+
+
+class GaussianDiffusion(nn.Module):
+    """DDPM training objective + DDIM sampler.
+
+    Parameters
+    ----------
+    num_train_timesteps : number of diffusion steps. SMOKE default 100,
+        production 1000.
+    beta_schedule : ``"cosine"`` or ``"linear"``.
+    """
+
+    def __init__(
+        self,
+        num_train_timesteps: int = 100,
+        beta_schedule: str = "cosine",
+    ) -> None:
+        super().__init__()
+        if num_train_timesteps < 2:
+            raise ValueError(f"num_train_timesteps must be >=2, got {num_train_timesteps}")
+        if beta_schedule == "cosine":
+            betas = _cosine_betas(num_train_timesteps)
+        elif beta_schedule == "linear":
+            betas = _linear_betas(num_train_timesteps)
+        else:
+            raise ValueError(f"unknown beta_schedule {beta_schedule!r}")
+
+        alphas = 1.0 - betas
+        alphas_cumprod = torch.cumprod(alphas, dim=0)
+
+        self.num_train_timesteps = num_train_timesteps
+        self.register_buffer("betas", betas)
+        self.register_buffer("alphas_cumprod", alphas_cumprod)
+        self.register_buffer("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
+        self.register_buffer(
+            "sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod)
+        )
+
+    # --- training ---
+
+    def add_noise(
+        self,
+        x0: torch.Tensor,
+        t: torch.Tensor,
+        noise: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """``q(x_t | x_0)``. Returns ``(x_t, noise)``."""
+        if noise is None:
+            noise = torch.randn_like(x0)
+        sqrt_acp = self.sqrt_alphas_cumprod[t].view(-1, 1, 1, 1)
+        sqrt_one_minus = self.sqrt_one_minus_alphas_cumprod[t].view(-1, 1, 1, 1)
+        return sqrt_acp * x0 + sqrt_one_minus * noise, noise
+
+    def training_loss(
+        self,
+        model: nn.Module,
+        x0: torch.Tensor,
+        hour: torch.Tensor,
+        dow: torch.Tensor,
+        is_weekend: torch.Tensor,
+        t: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Standard MSE-on-epsilon DDPM loss."""
+        b = x0.shape[0]
+        if t is None:
+            t = torch.randint(
+                0, self.num_train_timesteps, (b,), device=x0.device, dtype=torch.long
+            )
+        x_t, noise = self.add_noise(x0, t)
+        pred = model(x_t, t, hour, dow, is_weekend)
+        return F.mse_loss(pred, noise)
+
+    # --- sampling ---
+
+    @torch.no_grad()
+    def ddim_sample(
+        self,
+        model: nn.Module,
+        shape: tuple[int, ...],
+        hour: torch.Tensor,
+        dow: torch.Tensor,
+        is_weekend: torch.Tensor,
+        num_inference_steps: int = 10,
+        eta: float = 0.0,
+        clip_sample: bool = True,
+    ) -> torch.Tensor:
+        """Deterministic DDIM sampler (``eta=0``) by default.
+
+        Sub-samples ``num_inference_steps`` indices from
+        ``range(num_train_timesteps)`` and iterates them from latest to
+        earliest, producing ``x_0`` predictions and stepping along
+        Song et al. 2021's DDIM update.
+
+        ``clip_sample`` (default True) clamps the predicted ``x_0`` to
+        ``[-1, 1]`` at every step -- the same trick HuggingFace
+        ``diffusers`` applies via ``scheduler.config.clip_sample``. Real
+        OD slices live in ``[-1, 1]`` after normalization
+        (``configs/diffusion.yaml::data``), so the clip is consistent
+        with the data prior; without it an untrained model can blow up
+        through ``1/sqrt(alpha_cumprod_T) ~ 2000`` before downstream
+        ``expm1`` overflows.
+        """
+        if num_inference_steps < 1 or num_inference_steps > self.num_train_timesteps:
+            raise ValueError(
+                f"num_inference_steps must be in [1, {self.num_train_timesteps}], "
+                f"got {num_inference_steps}"
+            )
+        device = self.betas.device
+
+        # Evenly spaced subset, latest first.
+        ts_full = torch.linspace(
+            0, self.num_train_timesteps - 1, num_inference_steps + 1, device=device
+        ).round().long()
+        # Pair (t_cur, t_prev) -- iterate from highest to lowest.
+        t_curs = ts_full[1:].flip(0)
+        t_prevs = ts_full[:-1].flip(0)
+
+        x = torch.randn(shape, device=device)
+        for t_cur, t_prev in zip(t_curs, t_prevs):
+            t_batch = torch.full((shape[0],), int(t_cur.item()), device=device, dtype=torch.long)
+            eps_pred = model(x, t_batch, hour, dow, is_weekend)
+
+            acp_t = self.alphas_cumprod[t_cur]
+            acp_prev = self.alphas_cumprod[t_prev] if int(t_prev.item()) >= 0 else torch.tensor(
+                1.0, device=device
+            )
+
+            # Predicted x_0 from x_t and eps.
+            x0_pred = (x - torch.sqrt(1.0 - acp_t) * eps_pred) / torch.sqrt(acp_t)
+            if clip_sample:
+                x0_pred = x0_pred.clamp(-1.0, 1.0)
+            # Optional stochasticity (eta=0 -> deterministic).
+            sigma = (
+                eta
+                * torch.sqrt((1.0 - acp_prev) / (1.0 - acp_t))
+                * torch.sqrt(1.0 - acp_t / acp_prev)
+            )
+            dir_xt = torch.sqrt(torch.clamp(1.0 - acp_prev - sigma**2, min=0.0)) * eps_pred
+            x = torch.sqrt(acp_prev) * x0_pred + dir_xt
+            if eta > 0:
+                x = x + sigma * torch.randn_like(x)
+        return x
+
+    # --- diagnostics ---
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "num_train_timesteps": self.num_train_timesteps,
+            "beta_min": float(self.betas.min().item()),
+            "beta_max": float(self.betas.max().item()),
+            "alpha_cumprod_T": float(self.alphas_cumprod[-1].item()),
+        }

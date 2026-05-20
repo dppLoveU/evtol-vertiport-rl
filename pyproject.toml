@@ -30,6 +30,9 @@ dependencies = [
     # are intentionally NOT included -- the Stage-4 pipeline does not
     # need them.
     "torch>=2.11",
+    # einops: clean rearrange/repeat for the diffusion U-Net (Stage 4B).
+    # Tiny (~65 KB), no native deps.
+    "einops>=0.8",
 ]
 
 [project.optional-dependencies]

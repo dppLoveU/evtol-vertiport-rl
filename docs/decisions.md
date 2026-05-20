@@ -608,3 +608,39 @@ hosts (CPU laptops, older datacenter GPUs, future architectures).
 
 **Impact**: Stage 4B and beyond can use GPU. WandB / TensorBoard are
 not affected. No other deps need pinning to CUDA versions.
+
+---
+
+## 2026-05-20 — Stage 4B-1: DDIM sampler clips predicted x_0 to [-1, 1] by default
+
+**Not in the plan** — `docs/plan/stage4_diffusion.md` Architecture / Diffusion
+Schedule sections did not mention `clip_sample`. Added during the 4B-1
+smoke because without it a freshly-initialised U-Net produces wild DDIM
+samples that overflow the downstream `inverse_norm` (`expm1`).
+
+**Context**: `clip_val=100` and `sigma=0.0279` give
+`1/sqrt(alpha_cumprod_T) ≈ 2030` for the smoke `num_train_timesteps=100`
+schedule. A random-weight model emits sample values in roughly
+`[-1e4, +1e4]` after the DDIM reverse loop, which through
+`inverse_norm`'s `expm1(v*sigma + mu)` overflows to `+inf` for any
+``v ≥ 25`` (in the normalised domain — easily reached when the sampler
+is unbounded). Production diffusion implementations standardly clamp the
+predicted ``x_0`` to ``[-1, 1]`` at every reverse step — see
+HuggingFace `diffusers`' `scheduler.config.clip_sample` (default True).
+
+**Change**: `src/models/diffusion.py::GaussianDiffusion.ddim_sample`
+takes a `clip_sample: bool = True` argument. When True the predicted
+``x_0`` (recovered from the noise estimate) is clamped to ``[-1, 1]``
+before the DDIM update step. The flag is exposed so a future ablation
+can toggle it off if desired.
+
+**Rationale**: real OD slices live in ``[-1, 1]`` after the Stage-4A
+normalisation (`configs/diffusion.yaml::data`), so the clip is
+consistent with the data prior; it is not a hack to keep the smoke
+running. Effect on a trained model is small (the diffusion process
+already keeps ``x_0`` near ``[-1, 1]``); effect on an untrained smoke is
+the difference between a finite inverse-transform output and a
+``+inf``.
+
+**Status**: in code, on by default. Recorded here so future Stage 4B+
+ablations can audit it; not gated on user sign-off.
