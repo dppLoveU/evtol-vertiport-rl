@@ -1048,3 +1048,86 @@ baseline (per 2026-05-18 entry). The 12 km fallback's documented failure
 at the medium architecture is itself a paper-worthy negative result —
 "sparsity is not the only failure mode of a noise-MSE DDPM on
 extremely-sparse OD data".
+
+## 2026-05-20 Stage 4B-5A: posthoc guidance ablation — direction C closed, A/B next
+
+**Decision**: direction **C** ("lower `guidance_scale` / guidance
+ablation") from the 2026-05-20 "Stage 4B-4C" entry is **closed as
+necessary-but-insufficient**. The next ablation is **A + B**
+(normalization + weighted loss); guidance is dropped from `2.0` to
+`1.0` (the no-CFG path) as the new default for any future retrain
+under A/B. **No retrain has been launched** — this entry only records
+what the posthoc sweep proved.
+
+**Evidence**: `experiments/run_stage4_guidance_ablation.py` swept
+`guidance_scale ∈ {0.0, 0.5, 1.0, 1.5, 2.0}` on the 12 km medium
+failed-dense-debug `best.pt` (step 5000, val_loss_ema=0.0025), 48
+samples per scale (val loader exhausted at 48 of the requested 64),
+DDIM 50 steps, EMA weights, fixed init noise (`seed=42` across all
+scales so only the sampler changes). Wall ~11.4 min total on the
+RTX 5070 Ti. Outputs under
+`results/stage4/guidance_ablation_12km_medium_failed/`.
+
+| guidance_scale | gen_nonzero (round) | × real (0.2642 %) | row_ks | col_ks | gen_max |
+|----------------|---------------------|-------------------|--------|--------|---------|
+| 0.0            | 6.806 %             | **25.8 ×**        | 0.102  | 0.110  | 11      |
+| 0.5            | 12.916 %            | 48.9 ×            | 0.160  | 0.163  | 12      |
+| 1.0 (no CFG)   | 21.446 %            | 81.2 ×            | 0.280  | 0.285  | 11      |
+| 1.5            | 32.880 %            | 124.5 ×           | 0.374  | 0.384  | 11      |
+| 2.0 (training) | 44.200 %            | 167.3 ×           | 0.482  | 0.489  | 10      |
+
+**Findings**:
+
+1. **Guidance is a real, monotone contributor to over-density.**
+   Dropping `guidance_scale` from `2.0` → `0.0` cuts gen_nonzero ~6.5 ×
+   and row_ks ~4.7 ×. The training default `2.0` is too aggressive for
+   this sparsity regime.
+
+2. **Guidance alone CANNOT close the over-density gap.** Even pure
+   unconditional sampling (gs=0.0) is **25.8 × too dense** on the
+   rounded-int口径 against real val 0.2642 %. The model has internalized
+   a "dense everywhere" prior at training time; CFG amplifies it but
+   removing CFG does not undo it.
+
+3. **The remaining gap is at the loss / normalization layer.** Tail
+   behavior is wrong in the opposite direction from the data: gen_max
+   ~10-12 across all scales, vs real OD with peaks in the hundreds —
+   the failure mode is "too many small values everywhere", not "huge
+   spikes". This is consistent with the 2026-05-20 norm-ablation note
+   that scheme C's zero/nonzero gap collapses to ~0.25; noise-MSE on
+   that narrow range rewards continuous-mid-magnitude predictions
+   indiscriminately.
+
+4. **Sample-count variance is real but does not change the conclusion.**
+   The in-loop diag at step 5000 (gs=2.0, n=16) reported
+   `gen_nonzero_ratio=68.43 %`; the posthoc sweep at gs=2.0 / n=48
+   reads 44.20 %. Both are "deeply over-dense"; both are >100 × real;
+   either is incompatible with downstream Stage 5/6 use. The
+   2026-05-20 "Stage 4B-4C" direction **D** ("sample-quality-based
+   ckpt selection + bump `n_samples_diag` to ~64") is reinforced by
+   this gap and remains an open follow-up.
+
+**What changes in code (gated on user go-ahead, NOT applied yet)**:
+
+- `PROFILES[*]["guidance_scale"]` in `experiments/run_stage4_train.py`
+  drops `2.0 → 1.0` for `medium` and `full` (pilot stays as a smoke
+  baseline). This is a single-line change but it is **not** committed
+  in this entry — it only takes effect when the user authorizes the
+  next training run.
+- Direction A ("nonzero-aware / zero-pinned normalization") needs
+  `ODDataset` to expose a scheme switch (or a new `ODDataset`
+  subclass) so the 2026-05-20 norm-ablation scheme D / E can be
+  trained against without overwriting the current scheme-C cache.
+- Direction B ("weighted loss on nonzero entries") needs
+  `GaussianDiffusion.training_loss` to accept a per-pixel weight map
+  (e.g. `1 + log1p(x_real)`) and call sites in
+  `experiments/run_stage4_train.py` to forward the raw counts to it.
+
+These are **plumbing** changes, not algorithmic ones; they will be
+proposed in a follow-up sub-stage (4B-5B), reviewed against the plan
+before any retrain.
+
+**Falsification target for the next ablation**: a medium-step run
+under A or B must beat **25.8 × over-dense** (the lower bound this
+posthoc sweep established, at gs=0.0) on the same checkpoint-step
+budget. Anything worse and the proposed lever is not enough.
