@@ -1774,5 +1774,78 @@ no Stage-5 code; the `.npy` files are not committed; no `models/`,
 artefacts in this commit: `docs/progress.md`, this `docs/decisions.md`
 entry, and `data/synthetic/od_samples_agg_source.txt`.
 
+## 2026-05-21 Stage 5 PR1: minimal VertiportEnv scaffold — deliberate deviations from the Stage-5 plan
+
+**Decision**: Stage 5 PR1 implements a *minimal* `VertiportEnv` scaffold
+(env + config + unit tests + smoke). It is a deliberate, reduced subset of
+`docs/plan/stage5_rl_env.md`; the items below differ from the plan **by
+design, not by omission**. The plan document remains the target for
+Stage 5 as a whole — PR2+ closes these gaps. Recorded here per Hard Rule 4.
+
+**Deviation 1 — simplified observation.** PR1's observation is the dict
+`{selected_mask [C], covered_zones [Z], remaining_budget, current_coverage_ratio}`.
+The plan's richer state (`demand_agg [|Z|, 4]` per-zone demand statistics,
+`cand_static [|C|, ~8]` candidate static features, explicit `step_idx`) is
+**not** implemented in PR1. Reason: PR1's goal is a functioning
+environment scaffold the RL loop can be wired against; the demand/static
+feature engineering is a separable task that benefits from being designed
+alongside the policy network. To be added in a later PR.
+
+**Deviation 2 — single frozen scenario source, no `p_real` mixing.** PR1
+samples episodes only from the frozen bootstrap scenario tensor
+`data/synthetic/od_samples_agg.npy` (`[64, 530, 530]` int32,
+`bootstrap_day_block`). The plan's `reset()` mixes the real `od_evtol`
+aggregate with diffusion samples at probability `p_real`. PR1 drops the
+`p_real` mechanism because Stage 4 (see this file, 2026-05-21 "Stage 4B-5C
+PR5C-3B") closed the scenario-source selection: diffusion was downgraded
+to a comparison row and `bootstrap_day_block` was frozen as the **sole**
+Stage-5 scenario input. The `p_real` branch in the plan is therefore
+superseded by the PR5C-3B freeze; a future ablation that needs the real
+OD aggregate directly can re-introduce a real-scenario channel then.
+
+**Deviation 3 — pure incremental-coverage reward, no penalties.** PR1's
+reward is exactly `incremental_bilateral_coverage` normalized by total OD
+demand. The plan's `overlap_penalty` (`lam_overlap`) and `land_cost`
+(`lam_cost`) terms are **not** implemented. Reason: PR1 fixes the core
+coverage-delta math first (the plan's "Common Pitfalls" flags this as the
+bug-prone part); the penalty terms are additive hooks that belong with a
+later PR or a Stage-6 ablation, and `land_cost` has no data yet.
+
+**Deviation 4 — no vectorized env / coverage module / config dataclass.**
+PR1 does not create `src/envs/vec_env.py`, `src/envs/coverage.py`, an
+`EnvConfig` dataclass (`src/envs/config.py`), or `smoke_test_vec_env.py`.
+Config is loaded from `configs/env.yaml` via PyYAML (consistent with the
+rest of the repo's pre-Hydra config handling). The vectorized env is a
+PR2 concern — it is only needed once PPO requires `n_envs` parallel
+rollouts.
+
+**Deviation 5 — Gymnasium-style class, `gymnasium` not imported.**
+`gymnasium` is not installed in the current environment and PR1 does not
+add it. `VertiportEnv` is implemented as a plain class following the
+Gymnasium contract exactly (`reset(seed, options) -> (obs, info)`,
+`step(action) -> (obs, reward, terminated, truncated, info)`,
+`action_masks() -> [C] bool`). Reason: keep PR1 self-contained and
+installable-dependency-free; the API is chosen so PR2 can make the class
+subclass `gymnasium.Env` with no behavioural change. Adding
+`gymnasium>=0.29` and `sb3-contrib` to `pyproject.toml` and wiring
+MaskablePPO is explicitly PR2 scope.
+
+**Conclusion**: these five points are scoping decisions to get a minimal
+usable environment scaffold + smoke in place quickly, not gaps left by
+accident. PR1's deliverable is the scaffold; Stage 5 PR2 enters the
+Gymnasium / MaskablePPO integration and begins closing deviations 1, 4
+and 5. No PPO training and no Stage 6 work are part of PR1. The Stage-5
+plan (`docs/plan/stage5_rl_env.md`) stays the reference for the full
+environment.
+
+**Tracked artefacts in this commit**: `configs/env.yaml`,
+`src/envs/__init__.py`, `src/envs/vertiport_env.py`,
+`tests/test_vertiport_env.py`, `experiments/run_stage5_env_smoke.py`,
+`docs/progress.md`, and this `docs/decisions.md` entry. **Explicit
+non-actions**: no PPO training, no Stage 6 work, no `gymnasium`/
+`sb3-contrib` install or `pyproject.toml` change, no Stage 4 result
+changes; no `data/`, `models/`, `results/`, `.claude/`, `docs/handoff/`,
+or `tb/` changes staged.
+
 
 
