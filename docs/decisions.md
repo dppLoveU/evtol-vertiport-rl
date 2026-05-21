@@ -1847,5 +1847,55 @@ non-actions**: no PPO training, no Stage 6 work, no `gymnasium`/
 changes; no `data/`, `models/`, `results/`, `.claude/`, `docs/handoff/`,
 or `tb/` changes staged.
 
+## 2026-05-21 Stage 5 PR2: MaskablePPO training smoke — minimal RL stack wiring
+
+**Decision**: Stage 5 PR2 wires the RL training stack onto `VertiportEnv`
+and proves it runs, nothing more. Its deliverable is a *smoke test* — a
+512-timestep MaskablePPO `learn()` plus a 3-episode deterministic
+evaluation — **not** a PPO baseline. Recorded here so the smoke is not
+later mistaken for a paper result.
+
+**Dependency addition (Hard Rule 9).** `gymnasium>=1.0`,
+`stable-baselines3>=2.8` and `sb3-contrib>=2.8` are added to
+`pyproject.toml` `[project] dependencies` and installed into `.venv`
+(resolved versions: gymnasium 1.2.3, SB3 2.8.0, sb3-contrib 2.8.0).
+`sb3-contrib` provides MaskablePPO, which is the Stage-5/6 RL algorithm of
+record (`CLAUDE.md` §8: "RL: MaskablePPO"). `ray` / `rllib` are
+deliberately **not** added — SB3 covers the planned training and CVaR
+work; a second RL framework would be dead weight.
+
+**`VertiportEnv` is now a `gymnasium.Env`.** PR1 Deviation 5 (plain class,
+no `gymnasium` import) is closed: the class subclasses `gymnasium.Env`,
+declares `action_space`/`observation_space`, and the two scalar
+observation fields became shape-`(1,)` float32 arrays so
+`observation_space.contains(obs)` holds. The MDP — `reset`, `step`,
+`action_masks`, reward — is behaviourally unchanged from PR1.
+
+**What PR2 deliberately does NOT do.** (1) No paper-grade PPO baseline —
+training is capped at 512 timesteps purely to exercise the code path.
+(2) No complex observation feature engineering — PR1 Deviation 1
+(`demand_agg` / `cand_static` features) stays open; consequently the
+trained policy is scenario-blind (it selects an identical candidate
+sequence across scenarios because the observation carries no per-scenario
+demand signal). (3) No CVaR — the robustness objective (`CLAUDE.md` §8 C2)
+is not implemented. (4) No vectorized env, no callbacks, no
+hyperparameter tuning. (5) No Stage 6 work.
+
+**Where the real RL work lives.** The formal PPO baseline, the
+demand-aware observation, the CVaR-PPO robustness objective and proper
+training/evaluation protocol are **Stage 6** (`docs/plan/stage6_*`). PR2
+only guarantees that `VertiportEnv` plugs into MaskablePPO and that a
+train→eval loop completes without error.
+
+**Tracked artefacts in this commit**: `pyproject.toml`,
+`src/envs/vertiport_env.py`, `tests/test_vertiport_env.py`,
+`experiments/run_stage5_maskableppo_smoke.py`,
+`results/stage5/maskableppo_smoke/metrics.json` (small smoke-provenance
+record), `docs/progress.md`, and this `docs/decisions.md` entry.
+**Explicit non-actions**: no long/baseline training, no CVaR, no Stage 6
+work, no `ray`/`rllib`; `models/rl/maskableppo_smoke/model.zip` is not
+committed (`models/` gitignored); no `data/`, `.claude/`, `docs/handoff/`,
+or `tb/` changes staged.
+
 
 

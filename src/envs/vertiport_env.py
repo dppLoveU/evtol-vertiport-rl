@@ -4,11 +4,10 @@ Gymnasium-style sequential vertiport placement environment. The agent
 places ``k_select`` vertiports, one per step; the reward at each step is
 the incremental bilateral OD demand newly covered by that placement.
 
-PR1 scope: a self-contained environment plus its config and tests. It
-deliberately does NOT import ``gymnasium`` -- that dependency is wired in
-Stage-5 PR2 together with MaskablePPO. The class follows the Gymnasium
-``reset`` / ``step`` / ``action_masks`` contract so PR2 can make it
-subclass ``gymnasium.Env`` with no behavioural change.
+The class subclasses ``gymnasium.Env`` and exposes an ``action_masks()``
+method so ``sb3-contrib``'s MaskablePPO can mask already-placed
+candidates. The MDP itself (reset / step / reward) is unchanged from the
+Stage-5 PR1 scaffold.
 
 Bilateral OD coverage: an OD pair ``(i, j)`` is covered iff both origin
 zone ``i`` and destination zone ``j`` lie in the currently covered zone
@@ -20,8 +19,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import gymnasium as gym
 import numpy as np
 import yaml
+from gymnasium import spaces
 from numpy.typing import NDArray
 
 REPO = Path(__file__).resolve().parents[2]
@@ -33,7 +34,7 @@ def _resolve(path_str: str, base_dir: Path) -> Path:
     return p if p.is_absolute() else base_dir / p
 
 
-class VertiportEnv:
+class VertiportEnv(gym.Env):
     """Sequential K-vertiport placement environment.
 
     Parameters
@@ -66,6 +67,7 @@ class VertiportEnv:
         invalid_action: str = "mask",
         seed: int = 42,
     ) -> None:
+        super().__init__()
         od = np.ascontiguousarray(od_samples_agg)
         cov = np.ascontiguousarray(cand_covers_zones).astype(bool)
 
@@ -98,14 +100,26 @@ class VertiportEnv:
         self.normalize: bool = bool(normalize)
         self.invalid_action: str = invalid_action
 
-        # Discrete action space size; observation field shapes.
-        self.action_space_n: int = self.n_candidates
-        self.observation_spec: dict[str, tuple[int, ...]] = {
-            "selected_mask": (self.n_candidates,),
-            "covered_zones": (self.n_zones,),
-            "remaining_budget": (),
-            "current_coverage_ratio": (),
-        }
+        # Gymnasium spaces. The observation is a Dict; scalar fields are
+        # shape-(1,) float32 arrays so observation_space.contains(obs)
+        # holds (gymnasium Box rejects 0-d / python-scalar entries).
+        self.action_space = spaces.Discrete(self.n_candidates)
+        self.observation_space = spaces.Dict(
+            {
+                "selected_mask": spaces.Box(
+                    0.0, 1.0, shape=(self.n_candidates,), dtype=np.float32
+                ),
+                "covered_zones": spaces.Box(
+                    0.0, 1.0, shape=(self.n_zones,), dtype=np.float32
+                ),
+                "remaining_budget": spaces.Box(
+                    0.0, float(self.k_select), shape=(1,), dtype=np.float32
+                ),
+                "current_coverage_ratio": spaces.Box(
+                    0.0, 1.0, shape=(1,), dtype=np.float32
+                ),
+            }
+        )
 
         self._rng: np.random.Generator = np.random.default_rng(seed)
 
@@ -120,14 +134,24 @@ class VertiportEnv:
 
     @classmethod
     def from_config(
-        cls, cfg: dict[str, Any], base_dir: Path | None = None
+        cls,
+        config: str | Path | dict[str, Any],
+        base_dir: Path | None = None,
     ) -> VertiportEnv:
-        """Build a VertiportEnv from a parsed ``configs/env.yaml`` dict.
+        """Build a VertiportEnv from ``configs/env.yaml``.
 
-        Loads the frozen scenario tensor and the Stage-2 coverage mask,
-        validates their shapes against the config dimensions, and returns
-        the constructed environment.
+        ``config`` may be a path to the yaml file or an already-parsed
+        config dict. Loads the frozen scenario tensor and the Stage-2
+        coverage mask, validates their shapes against the config
+        dimensions, and returns the constructed environment. Relative
+        data paths are resolved against ``base_dir`` (default: repo root).
         """
+        if isinstance(config, (str, Path)):
+            with open(config) as fh:
+                cfg = yaml.safe_load(fh)
+        else:
+            cfg = config
+
         base = base_dir if base_dir is not None else REPO
         od_path = _resolve(cfg["scenario_source"], base)
         cov_path = _resolve(cfg["cand_covers_zones_path"], base)
@@ -161,16 +185,6 @@ class VertiportEnv:
             seed=int(env_cfg.get("seed", cfg.get("seed", 42))),
         )
 
-    @classmethod
-    def from_config_file(
-        cls, config_path: str | Path, base_dir: Path | None = None
-    ) -> VertiportEnv:
-        """Build a VertiportEnv directly from a yaml config file path."""
-        config_path = Path(config_path)
-        with open(config_path) as fh:
-            cfg = yaml.safe_load(fh)
-        return cls.from_config(cfg, base_dir=base_dir)
-
     # -- core API -----------------------------------------------------
 
     def reset(
@@ -182,6 +196,7 @@ class VertiportEnv:
         given the RNG is re-seeded first, so the sampled ``scenario_idx``
         is reproducible across resets with the same seed.
         """
+        super().reset(seed=seed)
         if seed is not None:
             self._rng = np.random.default_rng(seed)
 
@@ -263,8 +278,12 @@ class VertiportEnv:
         return {
             "selected_mask": self._selected_mask.astype(np.float32),
             "covered_zones": self._covered_zones.astype(np.float32),
-            "remaining_budget": np.float32(self.k_select - len(self._selected)),
-            "current_coverage_ratio": np.float32(self.coverage_ratio),
+            "remaining_budget": np.array(
+                [self.k_select - len(self._selected)], dtype=np.float32
+            ),
+            "current_coverage_ratio": np.array(
+                [self.coverage_ratio], dtype=np.float32
+            ),
         }
 
     def _get_info(self, incremental_gain: float) -> dict[str, Any]:

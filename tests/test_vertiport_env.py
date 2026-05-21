@@ -68,10 +68,12 @@ def test_reset_returns_obs_and_info() -> None:
     }
     assert obs["selected_mask"].shape == (4,)
     assert obs["covered_zones"].shape == (4,)
+    assert obs["remaining_budget"].shape == (1,)
+    assert obs["current_coverage_ratio"].shape == (1,)
     assert not obs["selected_mask"].any()
     assert not obs["covered_zones"].any()
-    assert float(obs["remaining_budget"]) == _K_SELECT
-    assert float(obs["current_coverage_ratio"]) == 0.0
+    assert obs["remaining_budget"][0] == _K_SELECT
+    assert obs["current_coverage_ratio"][0] == 0.0
 
     assert info["selected_count"] == 0
     assert info["coverage_ratio"] == 0.0
@@ -197,5 +199,59 @@ def test_zero_total_demand_does_not_crash() -> None:
         obs, reward, terminated, _, info = env.step(action)
         assert reward == 0.0
         assert info["coverage_ratio"] == 0.0
-        assert np.isfinite(float(obs["current_coverage_ratio"]))
+        assert np.isfinite(obs["current_coverage_ratio"][0])
     assert terminated is True
+
+
+# -- Gymnasium API conformance (PR2) ----------------------------------
+
+
+def test_is_gymnasium_env() -> None:
+    import gymnasium as gym
+
+    env = _make_env()
+    assert isinstance(env, gym.Env)
+
+
+def test_action_space_contains_valid_action() -> None:
+    env = _make_env()
+    env.reset(seed=42)
+    valid = int(np.flatnonzero(env.action_masks())[0])
+    assert env.action_space.contains(valid)
+    assert env.action_space.n == 4
+
+
+def test_observation_space_contains_obs_after_reset() -> None:
+    env = _make_env()
+    obs, _ = env.reset(seed=42)
+    assert env.observation_space.contains(obs)
+
+
+def test_observation_space_contains_obs_after_step() -> None:
+    env = _make_env()
+    env.reset(seed=42)
+    for _ in range(_K_SELECT):
+        action = int(np.flatnonzero(env.action_masks())[0])
+        obs, _, _, _, _ = env.step(action)
+        assert env.observation_space.contains(obs)
+
+
+def test_action_masks_dtype_and_shape() -> None:
+    env = _make_env()
+    env.reset(seed=42)
+    masks = env.action_masks()
+    assert masks.dtype == bool
+    assert masks.shape == (env.n_candidates,)
+
+
+def test_step_returns_gymnasium_five_tuple() -> None:
+    env = _make_env()
+    env.reset(seed=42)
+    result = env.step(int(np.flatnonzero(env.action_masks())[0]))
+    assert len(result) == 5
+    obs, reward, terminated, truncated, info = result
+    assert env.observation_space.contains(obs)
+    assert isinstance(reward, float)
+    assert isinstance(terminated, bool)
+    assert isinstance(truncated, bool)
+    assert isinstance(info, dict)
