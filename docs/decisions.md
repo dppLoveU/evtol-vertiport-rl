@@ -2111,3 +2111,90 @@ and this `docs/decisions.md` entry. **Explicit non-actions**: no PPO
 training, no CVaR, no custom policy, no scenario regeneration or
 perturbation, no diffusion-source switch, no Stage 7 work; no `models/`,
 `data/`, `.claude/`, `docs/handoff/`, or `tb/` changes staged.
+
+## 2026-05-21 Stage 6 PR4: formulation audit — robust RL claim is not supported yet
+
+**Decision**: Stage 6 PR4 audits the deeper formulation issues exposed by
+PR3. PR3 showed the shallow symptom: scenario diversity FAIL and greedy
+> PPO. PR4 asks whether the current MDP, observation, and scenario set
+can support a robust-RL paper claim even before any more training.
+
+**What PR4 built.**
+
+1. **Fixed-selection evaluation helpers.** `src/baselines/greedy.py` now
+   includes `evaluate_fixed_selection`, `evaluate_fixed_selection_many`,
+   `greedy_blind_mean`, and `robust_cvar_greedy`. These are diagnostic
+   helpers only; they do not change `VertiportEnv`.
+
+2. **Formulation audit script.**
+   `experiments/run_stage6_formulation_audit.py` compares three greedy
+   placements on the same frozen 64-scenario bootstrap set:
+   `greedy_oracle` (per-scenario own OD), `greedy_blind_mean` (one fixed
+   set selected on mean OD), and `greedy_robust_cvar_simple` (fixed set
+   selected by bottom-alpha marginal coverage gain, alpha=0.3). It also
+   performs only a Gurobi availability check plus optional smoke.
+
+**Findings.**
+
+- **The single-scenario env is an expectation objective.** Each episode
+  samples one scenario and rewards incremental bilateral coverage on
+  that scenario. PPO optimizes expected return across sampled episodes;
+  there is no multi-scenario rollout, no held-out scenario split, and no
+  lower-tail reward inside the Stage-5 env.
+
+- **`demand_features` are oracle ground-truth scenario information.**
+  They are computed directly from the sampled OD matrix at reset
+  (origin outflow, destination inflow, total zone flow, covered-zone
+  indicator). This is not a future-action leak, but it is ground-truth
+  scenario information. On the current scenario set it does not help:
+  oracle mean coverage is 0.432261 vs blind-mean 0.434402, so
+  `oracle - blind = -0.002141`, below the 0.02 meaningful-advantage
+  threshold.
+
+- **The current scenario set has weak robustness tension.** The simple
+  robust-CVaR greedy selected the exact same fixed sequence as
+  blind-mean and produced identical lower-tail metrics:
+  min/p05/CVaR0.3 = 0.428089 / 0.430029 / 0.431224. Therefore
+  `robust - blind` worst, p05, and CVaR are all 0.000000. This confirms
+  that the bootstrap scenario set does not create a meaningful
+  robustness tradeoff.
+
+- **PPO remains noncompetitive.** The greedy oracle mean 0.432261 still
+  exceeds PPO static 20k mean 0.361545 and PPO demand-aware 20k mean
+  0.335205 by a large margin. Continuing PPO without fixing the
+  formulation would only train inside the same weak objective.
+
+- **MILP is not a blocker.** `gurobipy` is not installed in the current
+  `.venv`, so the MILP smoke was recorded as unavailable/skipped. PR4
+  does not install it and does not depend on MILP success.
+
+**Decision on next path.**
+
+- **Path A: patch current framework.** Acceptable only for a weaker
+  engineering baseline: keep the single-scenario env, add held-out
+  scenario evaluation and stronger heuristics, and avoid robust-RL
+  claims unless scenario tension appears.
+- **Path B: redesign MDP for robust placement.** Recommended if the
+  paper still needs a robust-RL claim. The MDP/evaluation must use
+  multi-scenario rollout, disjoint scenario families, and an explicit
+  lower-tail / CVaR-style reward or selection criterion.
+- **Path C: reframe paper story.** Viable if the project pivots away
+  from robust RL and instead tells a diagnostics / facility-location
+  heuristic story.
+
+**PR4 choice**: do not continue PPO or CVaR-PPO under the current
+Stage-5/6 formulation. The robust-RL claim is not supported as-is. The
+cleanest research route is Path B; Path A and Path C are narrower
+fallbacks.
+
+**Tracked artefacts in this commit**:
+`experiments/run_stage6_formulation_audit.py`,
+`src/baselines/greedy.py`, `tests/test_formulation_audit.py`,
+`results/stage6/formulation_audit/formulation_audit.json`,
+`results/stage6/formulation_audit/formulation_audit.csv`,
+`results/stage6/formulation_audit/formulation_audit_report.md`,
+`docs/progress.md`, and this `docs/decisions.md` entry. **Explicit
+non-actions**: no PPO training, no CVaR-PPO, no diffusion-source
+switching, no `CandidateTokenExtractor`, no Stage-5 env behaviour
+change, no `models/`, `data/`, `.claude/`, `docs/handoff/`, or `tb/`
+changes staged.
