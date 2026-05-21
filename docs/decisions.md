@@ -1562,3 +1562,97 @@ summary.md}`, plus the matching `docs/progress.md` line and this
 `docs/decisions.md` entry. `data/synthetic/od_samples_agg_bootstrap.npy` is
 **untracked** (`/data/` is anchored-ignored in `.gitignore`); regeneration is
 deterministic via the command above with `seed=42`.
+
+## 2026-05-21 Stage 4B-5C PR5C-1B: posthoc calibration MILD, inferior to bootstrap
+
+**Context**: PR5C-1A (commit `c567b80`) shipped the pure-function posthoc
+calibration module (`clip_nonnegative`, `apply_threshold_and_scale`,
+`grid_search_tau_scale`, `evaluate_calibrated_samples`,
+`acceptance_verdict`, ...) + 29 unit tests. PR5C-1B (this entry) composes
+that module with the real PR5B-3b-3 zpin+weighted pilot checkpoint to
+produce a diagnostic report only. The CLI is new
+(`experiments/run_stage4_posthoc_calibrate.py`); no new checkpoint trained,
+no medium run, no Stage-5 code edited, no scenario `.npy` written.
+
+**What was done**: posthoc calibration `(tau, scale)` was fit ONLY against
+the real 12 km train aggregate's `nonzero_ratio` and `total_mass` (objective
+`|nz / real_nz - 1| + 1.0 * |mass / real_mass - 1|`, 20 × 20 = 400-point
+grid, `tau ∈ linspace(0.1, 2.0)`, `scale ∈ geomspace(1e-3, 2.0)`); val and
+test aggregates were used ONLY for reporting (the `grid_search_tau_scale`
+API contract rejects a non-2-D reference, so val/test cannot be passed by
+mistake). Sample budget: 48 continuous DDIM samples (EMA weights, 50
+inference steps, guidance_scale 1.0 per the YAML override), conditions
+taken from the val loader's full 1-day hour grid, seed=42.
+
+**Result: MILD, NOT PASS**. Best fit `tau=1.0000, scale=2.0000` (scale at
+upper grid edge; train objective 0.046). Test verdict on after-calibration
+metrics (0 of 5 PASS gates met, all 4 MILD floor gates met):
+
+| gate                | test after | PASS band | met? |
+|---------------------|------------|-----------|------|
+| nz_x_real           | 2.829      | [0.7, 1.5]| ✗    |
+| mass_ratio          | 5.388      | [0.8, 1.2]| ✗ *  |
+| row_sum_ks_stat     | 0.971      | ≤ 0.3     | ✗    |
+| col_sum_ks_stat     | 0.969      | ≤ 0.3     | ✗    |
+| top20_pair_overlap  | 0 / 20     | ≥ 12      | ✗    |
+
+\* The mass_ratio miss is partly scale-mismatch (calibrator is matched to
+train-aggregate scale = 5 days; test is 1 day, so `mass_ratio ≈ 5` is
+expected and NOT a model failure). The headline diagnostic is the spatial
+axes.
+
+MILD floor passes on every axis: row_ks 0.971 < 1.000, col_ks 0.969 <
+1.000, nz_x_real 2.829 < 143.0, mass_ratio 5.388 < 181.0 (failed-diffusion
+PR5B-3b-3 baseline).
+
+**Critical finding — spatial structure is NOT learned**:
+`top20_pair_overlap = 0` and `top20_pair_overlap_against_top50 = 0` mean
+the calibrated diffusion samples have ZERO rank correlation with the
+real_test top OD pairs at any (tau, scale). The posthoc calibrator can
+fix marginal density (nz_x_real 143.0 → 2.83, 50.5 × cut) but it CANNOT
+synthesize spatial structure that is not in the underlying noise-MSE
+trained model. This is the same failure mode previously identified for
+the uncalibrated weighted-zpin pilot (PR5B-3b-3 `top20` not measured but
+implied by `row_sum_ks_stat = 1.000`) — calibration narrows the gap on
+density only.
+
+**Comparison to bootstrap candidate (PR5C-2B)** on the same 12 km test
+split:
+
+| axis                  | bootstrap (PR5C-2B) | calibrated diffusion (this PR) | bootstrap × better |
+|-----------------------|---------------------|--------------------------------|--------------------|
+| per-day row_sum_ks    | 0.093               | 0.971                          | 10.4 ×             |
+| per-day col_sum_ks    | 0.078               | 0.969                          | 12.4 ×             |
+| top20_pair_overlap    | 11.89 / 20          | 0 / 20                         | qualitative win    |
+| nz_x_real             | 2.677               | 2.829                          | comparable         |
+| per-day mass_ratio    | 1.126               | 0.957 (train-scale)            | both ≈ 1           |
+
+Both candidates land at MILD per the same verdict rule, but bootstrap
+delivers a **usable** scenario distribution (correct top-pair ranking,
+near-real marginals, no leakage) while the calibrated diffusion delivers
+calibrated marginals on top of a spatially incoherent prior. **Bootstrap
+remains the preferred Stage-5 source candidate going into PR5C-3**, with
+the calibrated diffusion artefact serving as a **comparison row** that
+documents what posthoc calibration can and cannot fix.
+
+**Decision boundary against PR5C-3**: no source has been frozen by this
+entry. `data/synthetic/od_samples_agg.npy` remains absent; PR5C-3 (the
+unified scenario-source comparison) is the gate that selects a source
+and the user is the gate that confirms the copy. This PR5C-1B record
+is the second of the two candidate diagnostics that PR5C-3 will consume
+(the first being PR5C-2B's `results/stage4/bootstrap/metrics.json`); a
+third candidate (e.g. a longer-run / different-arch retrain) would
+require its own sub-PR before PR5C-3.
+
+**Explicit non-actions**: no training, no medium, no new checkpoint, no
+Stage-5 code edits, no `data/synthetic/od_samples_agg.npy` write, no
+`data/synthetic/od_samples_agg_diffusion_calibrated.npy` write
+(deliberately deferred — PR5C-3 decides whether to write any candidate
+at this path), no `data/synthetic/od_samples.npy` write, no modification
+of `data/synthetic/od_samples_agg_bootstrap.npy` (the CLI never opens
+it). Tracked artefacts in this commit: `experiments/run_stage4_posthoc_calibrate.py`,
+`results/stage4/posthoc_calibration_zpin_weighted/{metrics.json,
+metrics.csv, calibration_grid.png, marginal_match_before_after.png,
+decision_report.md}`, plus `docs/progress.md` and this `docs/decisions.md`
+entry.
+
