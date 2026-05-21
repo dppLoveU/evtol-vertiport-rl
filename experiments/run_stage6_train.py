@@ -186,6 +186,21 @@ def main() -> None:
     ]
     coverages = np.array([ep["coverage_ratio"] for ep in episodes], dtype=np.float64)
     rewards = np.array([ep["total_reward"] for ep in episodes], dtype=np.float64)
+
+    # Distinct selected-candidate sequences across eval episodes. > 1
+    # means the deterministic policy adapts its placement to the
+    # scenario -- i.e. it is no longer scenario-blind (the PR1 failure
+    # mode, where every eval episode produced an identical sequence).
+    unique_sequences = sorted(
+        {tuple(ep["selected_candidates"]) for ep in episodes}
+    )
+    n_unique_sequences = len(unique_sequences)
+    scenario_conditioned_policy = n_unique_sequences > 1
+
+    obs_shapes = {
+        k: list(space.shape)
+        for k, space in train_env.observation_space.spaces.items()
+    }
     for ep_i, ep in enumerate(episodes):
         print(
             f"  eval ep {ep_i:2d}: scenario_idx={ep['scenario_idx']:3d} "
@@ -223,6 +238,12 @@ def main() -> None:
             "n_candidates": train_env.n_candidates,
             "k_select": train_env.k_select,
         },
+        "observation": {
+            "keys": sorted(obs_shapes.keys()),
+            "shapes": obs_shapes,
+            "include_demand_features": train_env.include_demand_features,
+            "normalize_demand_features": train_env.normalize_demand_features,
+        },
         "ppo": {
             "policy": policy,
             "total_timesteps": total_timesteps,
@@ -244,6 +265,8 @@ def main() -> None:
             "min_coverage": float(coverages.min()),
             "max_coverage": float(coverages.max()),
             "mean_total_reward": float(rewards.mean()),
+            "unique_selected_sequences": n_unique_sequences,
+            "scenario_conditioned_policy": scenario_conditioned_policy,
         },
         "model_path": str(model_path),
     }
@@ -268,6 +291,8 @@ def main() -> None:
         "std_coverage": float(coverages.std()),
         "min_coverage": float(coverages.min()),
         "max_coverage": float(coverages.max()),
+        "unique_selected_sequences": n_unique_sequences,
+        "scenario_conditioned_policy": scenario_conditioned_policy,
     }
     selected_path = result_dir / "selected.json"
     with open(selected_path, "w") as fh:
@@ -284,7 +309,11 @@ def main() -> None:
         f"min={metrics['eval']['min_coverage']:.6f} "
         f"max={metrics['eval']['max_coverage']:.6f}"
     )
-    print("  -> OK (Stage-6 PR1 MaskablePPO training + eval completed)")
+    print(
+        f"  unique sequences    : {n_unique_sequences}  "
+        f"scenario_conditioned_policy={scenario_conditioned_policy}"
+    )
+    print("  -> OK (Stage-6 MaskablePPO training + eval completed)")
 
 
 if __name__ == "__main__":

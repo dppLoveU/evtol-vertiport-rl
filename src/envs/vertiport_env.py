@@ -55,6 +55,16 @@ class VertiportEnv(gym.Env):
         :meth:`action_masks`; stepping such an action raises ``ValueError``.
     seed:
         Base seed for the scenario-sampling RNG.
+    include_demand_features:
+        If True the observation gains a ``demand_features`` ``[Z, 4]``
+        float32 array -- the per-zone OD demand summary of the episode's
+        sampled scenario (origin outflow, destination inflow, total zone
+        flow, covered-zone indicator). Lets the policy condition on the
+        scenario instead of being scenario-blind.
+    normalize_demand_features:
+        If True the first three ``demand_features`` columns are divided
+        by ``max(total_zone_flow) + eps`` within the scenario so they
+        live in ``[0, 1]``; the covered-zone indicator is always 0/1.
     """
 
     def __init__(
@@ -66,6 +76,8 @@ class VertiportEnv(gym.Env):
         normalize: bool = True,
         invalid_action: str = "mask",
         seed: int = 42,
+        include_demand_features: bool = False,
+        normalize_demand_features: bool = True,
     ) -> None:
         super().__init__()
         od = np.ascontiguousarray(od_samples_agg)
@@ -99,27 +111,35 @@ class VertiportEnv(gym.Env):
         self.k_select: int = int(k_select)
         self.normalize: bool = bool(normalize)
         self.invalid_action: str = invalid_action
+        self.include_demand_features: bool = bool(include_demand_features)
+        self.normalize_demand_features: bool = bool(normalize_demand_features)
 
         # Gymnasium spaces. The observation is a Dict; scalar fields are
         # shape-(1,) float32 arrays so observation_space.contains(obs)
         # holds (gymnasium Box rejects 0-d / python-scalar entries).
         self.action_space = spaces.Discrete(self.n_candidates)
-        self.observation_space = spaces.Dict(
-            {
-                "selected_mask": spaces.Box(
-                    0.0, 1.0, shape=(self.n_candidates,), dtype=np.float32
-                ),
-                "covered_zones": spaces.Box(
-                    0.0, 1.0, shape=(self.n_zones,), dtype=np.float32
-                ),
-                "remaining_budget": spaces.Box(
-                    0.0, float(self.k_select), shape=(1,), dtype=np.float32
-                ),
-                "current_coverage_ratio": spaces.Box(
-                    0.0, 1.0, shape=(1,), dtype=np.float32
-                ),
-            }
-        )
+        obs_spaces: dict[str, spaces.Space[Any]] = {
+            "selected_mask": spaces.Box(
+                0.0, 1.0, shape=(self.n_candidates,), dtype=np.float32
+            ),
+            "covered_zones": spaces.Box(
+                0.0, 1.0, shape=(self.n_zones,), dtype=np.float32
+            ),
+            "remaining_budget": spaces.Box(
+                0.0, float(self.k_select), shape=(1,), dtype=np.float32
+            ),
+            "current_coverage_ratio": spaces.Box(
+                0.0, 1.0, shape=(1,), dtype=np.float32
+            ),
+        }
+        if self.include_demand_features:
+            # Normalized features sit in [0, 1]; unnormalized outflow /
+            # inflow are unbounded above, so the Box high is inf then.
+            high = 1.0 if self.normalize_demand_features else np.inf
+            obs_spaces["demand_features"] = spaces.Box(
+                0.0, high, shape=(self.n_zones, 4), dtype=np.float32
+            )
+        self.observation_space = spaces.Dict(obs_spaces)
 
         self._rng: np.random.Generator = np.random.default_rng(seed)
 
@@ -131,6 +151,9 @@ class VertiportEnv(gym.Env):
         self._covered_zones: NDArray[np.bool_] = np.zeros(0, dtype=bool)
         self._selected: list[int] = []
         self._covered_demand: int = 0
+        # Per-zone [Z, 3] scenario demand summary (origin outflow,
+        # destination inflow, total zone flow); populated by reset().
+        self._demand_base: NDArray[np.float32] = np.zeros((0, 3), dtype=np.float32)
 
     @classmethod
     def from_config(
@@ -176,6 +199,7 @@ class VertiportEnv(gym.Env):
             raise ValueError(f"{od_path.name} has negative entries")
 
         env_cfg = cfg.get("env", {})
+        obs_cfg = cfg.get("observation", {})
         return cls(
             od,
             cov,
@@ -183,6 +207,12 @@ class VertiportEnv(gym.Env):
             normalize=bool(cfg["reward"]["normalize"]),
             invalid_action=str(env_cfg.get("invalid_action", "mask")),
             seed=int(env_cfg.get("seed", cfg.get("seed", 42))),
+            include_demand_features=bool(
+                obs_cfg.get("include_demand_features", False)
+            ),
+            normalize_demand_features=bool(
+                obs_cfg.get("normalize_demand_features", True)
+            ),
         )
 
     # -- core API -----------------------------------------------------
@@ -209,6 +239,8 @@ class VertiportEnv(gym.Env):
         self._covered_zones = np.zeros(self.n_zones, dtype=bool)
         self._selected = []
         self._covered_demand = 0
+        if self.include_demand_features:
+            self._demand_base = self._compute_demand_base()
 
         return self._get_obs(), self._get_info(incremental_gain=0.0)
 
@@ -274,8 +306,27 @@ class VertiportEnv(gym.Env):
             return 0.0
         return self._covered_demand / self._total_demand
 
+    def _compute_demand_base(self) -> NDArray[np.float32]:
+        """Per-zone OD demand summary for the current scenario.
+
+        Returns a ``[Z, 3]`` float32 array: origin outflow, destination
+        inflow, total zone flow. When ``normalize_demand_features`` is
+        set the three columns are divided by ``max(total_zone_flow)``
+        (plus a small epsilon) so they live in ``[0, 1]``.
+        """
+        m = self._m_total
+        origin_outflow = m.sum(axis=1).astype(np.float64)
+        destination_inflow = m.sum(axis=0).astype(np.float64)
+        total_zone_flow = origin_outflow + destination_inflow
+        base = np.stack(
+            [origin_outflow, destination_inflow, total_zone_flow], axis=1
+        )
+        if self.normalize_demand_features:
+            base = base / (float(total_zone_flow.max()) + 1e-8)
+        return base.astype(np.float32)
+
     def _get_obs(self) -> dict[str, Any]:
-        return {
+        obs: dict[str, Any] = {
             "selected_mask": self._selected_mask.astype(np.float32),
             "covered_zones": self._covered_zones.astype(np.float32),
             "remaining_budget": np.array(
@@ -285,6 +336,15 @@ class VertiportEnv(gym.Env):
                 [self.coverage_ratio], dtype=np.float32
             ),
         }
+        if self.include_demand_features:
+            # Column 4 is the live covered-zone indicator; it changes
+            # every step while the first three columns stay fixed for
+            # the episode's scenario.
+            covered_col = self._covered_zones.astype(np.float32)[:, None]
+            obs["demand_features"] = np.concatenate(
+                [self._demand_base, covered_col], axis=1
+            ).astype(np.float32)
+        return obs
 
     def _get_info(self, incremental_gain: float) -> dict[str, Any]:
         return {

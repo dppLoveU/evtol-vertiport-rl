@@ -1956,3 +1956,81 @@ runs, no sensitivity sweep, no SpoNet, no Stage 7 work, no new
 dependency; `models/rl/ppo_a6_bootstrap_20k_seed42/model.zip` is not
 committed (`models/` gitignored); no `data/`, `.claude/`,
 `docs/handoff/`, or `tb/` changes staged.
+
+## 2026-05-21 Stage 6 PR2: demand-aware observation — scope and a negative finding
+
+**Decision**: Stage 6 PR2 adds a per-scenario OD demand summary to the
+`VertiportEnv` observation (`demand_features`, a `[n_zones, 4]` float32
+array) so the policy can, in principle, condition on the sampled
+scenario rather than being scenario-blind — the PR1 failure mode, where
+the deterministic policy emitted an identical candidate sequence across
+all eval episodes.
+
+**What PR2 changed.**
+
+1. **Per-zone demand summary, not the full OD matrix.** The four
+   `demand_features` columns are origin outflow, destination inflow,
+   total zone flow, and the live covered-zone indicator. The full
+   `[Z, Z]` OD matrix is deliberately NOT exposed — at 530×530 it would
+   dominate the observation and bloat the policy MLP for no clear gain.
+   A per-zone marginal summary is the cheap, sufficient signal.
+
+2. **Opt-in, backward compatible.** `include_demand_features` defaults
+   to False, so the legacy four-key observation still works; the unit
+   tests that predate PR2 are unaffected. The flag is turned on in
+   `configs/env.yaml`.
+
+3. **Still `MultiInputPolicy`, still no CVaR.** PR2 does not touch the
+   policy network (the custom `CandidateTokenExtractor` is still
+   deferred) or the objective. It is still a mini run, not the final
+   paper baseline.
+
+**Negative finding (the substantive outcome of PR2).** With the
+demand-aware observation enabled, the 20k run still produced
+`unique_selected_sequences = 1` / `scenario_conditioned_policy = False`,
+and eval mean coverage was 0.3352 — slightly *below* PR1's 0.3615. The
+policy is still scenario-blind. Root cause, verified directly against
+`data/synthetic/od_samples_agg.npy`: the 64 frozen bootstrap scenarios
+are structurally near-identical. The bootstrap day-block sampler
+resamples the *same* real OD data, so the per-zone normalized demand
+summary varies by only avg per-element std ≈ 0.00075 (max ≈ 0.011) on
+the `[0, 1]` scale across all 64 scenarios. The `demand_features`
+channel is correct and present, but on this scenario set it carries
+almost no per-scenario signal, so the deterministic argmax does not
+move. The −0.026 coverage change is attributed to the extra 2120-dim
+flattened block diluting the stock `MultiInputPolicy` MLP and is within
+run-to-run noise, not a real regression.
+
+**Why the feature is kept anyway.** The demand-aware observation is
+correct and is a prerequisite, not the bottleneck. It will carry real
+signal once (a) the scenario set has genuine structural variation —
+i.e. diffusion-augmented scenarios rather than bootstrap resamples — and
+(b) a structure-aware custom policy replaces the stock flattening MLP.
+Reverting it would only have to be redone. The bottleneck PR2 exposed is
+the *scenario set*, not the observation.
+
+**Next step after PR2 (options, decide with the user).**
+
+- **Option A — Stage 6 PR3: formal A5/A6 baselines.** Proceed to the
+  paper baselines (A5 real-demand-only, A6 diffusion-augmented) at full
+  training length and multiple seeds. The scenario-blindness question
+  re-enters naturally at A6, where the diffusion-augmented scenario set
+  has structural variation.
+- **Option B — CVaR planning.** Begin the A7 / CVaR design. Note the
+  acceptance criterion (`A7 worst-case ≥ A6 worst-case by ≥ 3 pp`)
+  presupposes A6 exists, so this likely follows A else after PR3.
+
+PR3 vs CVaR planning is a user call; PR2 does not pick one.
+
+**Tracked artefacts in this commit**: `configs/env.yaml`,
+`configs/ppo_vertiport_demand.yaml`, `src/envs/vertiport_env.py`,
+`tests/test_vertiport_env.py`, `experiments/run_stage6_train.py`,
+`results/stage6/ppo_a6_bootstrap_demand_20k_seed42/metrics.json`,
+`results/stage6/ppo_a6_bootstrap_demand_20k_seed42/selected.json`,
+`results/stage6/ppo_a6_bootstrap_demand_20k_seed42/config.yaml`,
+`docs/progress.md`, and this `docs/decisions.md` entry. **Explicit
+non-actions**: no CVaR, no custom policy, no multi-seed, no A0-A4
+baselines, no SpoNet, no Stage 7 work, no new dependency;
+`models/rl/ppo_a6_bootstrap_demand_20k_seed42/model.zip` is not
+committed (`models/` gitignored); no `data/`, `.claude/`,
+`docs/handoff/`, or `tb/` changes staged.

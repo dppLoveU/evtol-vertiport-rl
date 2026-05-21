@@ -255,3 +255,98 @@ def test_step_returns_gymnasium_five_tuple() -> None:
     assert isinstance(terminated, bool)
     assert isinstance(truncated, bool)
     assert isinstance(info, dict)
+
+
+# -- Demand-aware observation (PR2) -----------------------------------
+
+
+def _make_env_demand(
+    od: np.ndarray | None = None, k_select: int = _K_SELECT
+) -> VertiportEnv:
+    """Build a VertiportEnv with the per-scenario demand features on."""
+    if od is None:
+        od = np.broadcast_to(_M, (_N_OMEGA, 4, 4)).copy()
+    return VertiportEnv(
+        od,
+        _COV,
+        k_select=k_select,
+        normalize=True,
+        seed=42,
+        include_demand_features=True,
+    )
+
+
+def test_demand_features_in_observation_space_after_reset() -> None:
+    env = _make_env_demand()
+    obs, _ = env.reset(seed=42)
+    assert "demand_features" in obs
+    assert env.observation_space.contains(obs)
+
+
+def test_demand_features_shape_and_dtype() -> None:
+    env = _make_env_demand()
+    obs, _ = env.reset(seed=42)
+    feats = obs["demand_features"]
+    assert feats.shape == (4, 4)  # (n_zones, 4)
+    assert feats.dtype == np.float32
+
+
+def test_demand_features_values_in_unit_range() -> None:
+    env = _make_env_demand()
+    obs, _ = env.reset(seed=42)
+    feats = obs["demand_features"]
+    assert feats.min() >= 0.0
+    assert feats.max() <= 1.0 + 1e-6
+
+
+def test_demand_features_covered_indicator_initially_zero() -> None:
+    env = _make_env_demand()
+    obs, _ = env.reset(seed=42)
+    # Column 3 is the covered-zone indicator: nothing covered yet.
+    assert np.array_equal(obs["demand_features"][:, 3], np.zeros(4, dtype=np.float32))
+
+
+def test_demand_features_covered_indicator_updates_on_step() -> None:
+    env = _make_env_demand()
+    env.reset(seed=42)
+    # cand 0 covers zone {0}; after the step zone 0's indicator is 1.
+    obs, _, _, _, _ = env.step(0)
+    indicator = obs["demand_features"][:, 3]
+    assert indicator[0] == 1.0
+    assert np.array_equal(indicator, env._covered_zones.astype(np.float32))
+    # The first three columns are scenario-fixed: unchanged across steps.
+    obs2, _, _, _, _ = env.step(1)
+    assert np.array_equal(
+        obs["demand_features"][:, :3], obs2["demand_features"][:, :3]
+    )
+
+
+def test_demand_features_off_keeps_legacy_observation() -> None:
+    env = _make_env()  # include_demand_features defaults to False
+    obs, _ = env.reset(seed=42)
+    assert "demand_features" not in obs
+    assert set(obs) == {
+        "selected_mask",
+        "covered_zones",
+        "remaining_budget",
+        "current_coverage_ratio",
+    }
+    assert env.observation_space.contains(obs)
+
+
+def test_demand_features_differ_across_scenarios() -> None:
+    # Give scenario 3 a transposed (structurally different) OD matrix so
+    # its normalized origin/destination columns differ from the rest.
+    od = np.broadcast_to(_M, (_N_OMEGA, 4, 4)).copy()
+    od[3] = _M.T
+    env = VertiportEnv(
+        od, _COV, k_select=_K_SELECT, normalize=True, seed=42,
+        include_demand_features=True,
+    )
+    feats: dict[int, np.ndarray] = {}
+    for s in range(200):
+        obs, info = env.reset(seed=s)
+        feats[info["scenario_idx"]] = obs["demand_features"].copy()
+    assert 3 in feats and len(feats) >= 2
+    others = [k for k in feats if k != 3]
+    assert any(not np.allclose(feats[3], feats[k]) for k in others)

@@ -1,0 +1,76 @@
+{
+  "kind": "stage6_pr1_maskableppo_train",
+  "note": "training harness / mini run, NOT the final paper baseline",
+  "run_name": "ppo_a6_bootstrap_demand_20k_seed42",
+  "method": "A6_bootstrap_expectation",
+  "config": "/home/yuri/code/transportation/evtol-vertiport-rl/configs/ppo_vertiport_demand.yaml",
+  "env_config": "/home/yuri/code/transportation/evtol-vertiport-rl/configs/env.yaml",
+  "seed": 42,
+  "device": "cuda",
+  "cuda_fallback": false,
+  "versions": {
+    "gymnasium": "1.2.3",
+    "stable_baselines3": "2.8.0",
+    "sb3_contrib": "2.8.0"
+  },
+  "env": {
+    "n_omega": 64,
+    "n_zones": 530,
+    "n_candidates": 813,
+    "k_select": 10
+  },
+  "observation": {
+    "keys": [
+      "covered_zones",
+      "current_coverage_ratio",
+      "demand_features",
+      "remaining_budget",
+      "selected_mask"
+    ],
+    "shapes": {
+      "covered_zones": [
+        530
+      ],
+      "current_coverage_ratio": [
+        1
+      ],
+      "demand_features": [
+        530,
+        4
+      ],
+      "remaining_budget": [
+        1
+      ],
+      "selected_mask": [
+        813
+      ]
+    },
+    "include_demand_features": true,
+    "normalize_demand_features": true
+  },
+  "ppo": {
+    "policy": "MultiInputPolicy",
+    "total_timesteps": 20000,
+    "n_steps": 256,
+    "batch_size": 256,
+    "gamma": 1.0,
+    "learning_rate": 0.0003,
+    "ent_coef": 0.01,
+    "vf_coef": 0.5,
+    "max_grad_norm": 0.5
+  },
+  "train_wall_s": 40.826,
+  "eval": {
+    "eval_episodes": 16,
+    "deterministic": true,
+    "protocol": "single post-training deterministic masked eval",
+    "mean_coverage": 0.3352048217600905,
+    "std_coverage": 0.0016584151153031773,
+    "min_coverage": 0.3322179815240491,
+    "max_coverage": 0.33872237688774903,
+    "mean_total_reward": 0.33520482176009053,
+    "unique_selected_sequences": 1,
+    "scenario_conditioned_policy": false
+  },
+  "model_path": "/home/yuri/code/transportation/evtol-vertiport-rl/models/rl/ppo_a6_bootstrap_demand_20k_seed42/model.zip"
+}
