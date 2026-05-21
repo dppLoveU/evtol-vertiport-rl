@@ -1,0 +1,9 @@
+source: bootstrap_day_block
+source_file: data/synthetic/od_samples_agg_bootstrap.npy
+frozen_file: data/synthetic/od_samples_agg.npy
+shape: [64, 530, 530]
+dtype: int32
+selected_by: Stage 4B-5C PR5C-3A unified comparison
+frozen_by: Stage 4B-5C PR5C-3B
+sha256: 327de8858deed51b0abe2b9018b51e7ddbd93054678429a4164c9db9cf9d2d18
+note: bootstrap_day_block selected because it is the only freezeable candidate and dominates diffusion rows on top20 overlap and row/col KS.

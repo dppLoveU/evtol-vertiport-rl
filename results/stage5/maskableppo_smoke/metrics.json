@@ -1,0 +1,92 @@
+{
+  "kind": "stage5_pr2_maskableppo_smoke",
+  "note": "SMOKE TEST, not a paper baseline",
+  "versions": {
+    "gymnasium": "1.2.3",
+    "stable_baselines3": "2.8.0",
+    "sb3_contrib": "2.8.0"
+  },
+  "config": "configs/env.yaml",
+  "seed": 42,
+  "device": "cuda",
+  "total_timesteps": 512,
+  "train_wall_s": 1.765,
+  "env": {
+    "n_omega": 64,
+    "n_zones": 530,
+    "n_candidates": 813,
+    "k_select": 10
+  },
+  "ppo": {
+    "policy": "MultiInputPolicy",
+    "n_steps": 64,
+    "batch_size": 64,
+    "gamma": 1.0,
+    "learning_rate": 0.0003
+  },
+  "eval_episodes": [
+    {
+      "seed": 42,
+      "scenario_idx": 5,
+      "selected_count": 10,
+      "selected_candidates": [
+        781,
+        711,
+        344,
+        580,
+        291,
+        5,
+        181,
+        682,
+        323,
+        303
+      ],
+      "final_coverage_ratio": 0.1406652960861279,
+      "total_reward": 0.14066529608612793,
+      "total_covered_demand": 65616
+    },
+    {
+      "seed": 43,
+      "scenario_idx": 32,
+      "selected_count": 10,
+      "selected_candidates": [
+        781,
+        711,
+        344,
+        580,
+        291,
+        5,
+        181,
+        682,
+        323,
+        303
+      ],
+      "final_coverage_ratio": 0.14181178680126436,
+      "total_reward": 0.14181178680126438,
+      "total_covered_demand": 67655
+    },
+    {
+      "seed": 44,
+      "scenario_idx": 42,
+      "selected_count": 10,
+      "selected_candidates": [
+        781,
+        711,
+        344,
+        580,
+        291,
+        5,
+        181,
+        682,
+        323,
+        303
+      ],
+      "final_coverage_ratio": 0.14202078279879016,
+      "total_reward": 0.14202078279879016,
+      "total_covered_demand": 66395
+    }
+  ],
+  "eval_mean_coverage_ratio": 0.14149928856206082,
+  "eval_mean_total_reward": 0.14149928856206082,
+  "model_path": "/home/yuri/code/transportation/evtol-vertiport-rl/models/rl/maskableppo_smoke/model.zip"
+}

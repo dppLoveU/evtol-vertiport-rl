@@ -1656,3 +1656,246 @@ metrics.csv, calibration_grid.png, marginal_match_before_after.png,
 decision_report.md}`, plus `docs/progress.md` and this `docs/decisions.md`
 entry.
 
+## 2026-05-21 Stage 4B-5C PR5C-3A: unified comparison recommends bootstrap
+
+**Context**: PR5C-2B (commit `c0f0c71`) produced the bootstrap scenario
+candidate (MILD); PR5C-1B (commit `77ee87c`) produced the posthoc-calibrated
+diffusion diagnostic (MILD, no candidate npy). PR5C-3A (this entry) is the
+unified comparison: a new CLI `experiments/run_stage4_compare_scenarios.py`
+reads both per-source metrics JSON files, builds one comparison table, and
+recommends a Stage-5 scenario source. **No source is frozen by this PR** —
+`data/synthetic/od_samples_agg.npy` is still not generated; the freeze is a
+separate sub-PR (PR5C-3B) gated on explicit user confirmation.
+
+**Comparison table** (four sources, sorted by the decision rule):
+
+| source | tier | freezeable | top20 | row_ks | col_ks | mass_ratio | nz_x_real |
+|--------|------|-----------|-------|--------|--------|-----------|-----------|
+| bootstrap_day_block                | MILD | **True**  | 11.89 | 0.093 | 0.078 | 1.126 | 2.677 |
+| diffusion_raw_zpin_weighted_pilot  | MILD | False     | 0.00  | 0.961 | 0.966 | 0.819 | 5.831 |
+| diffusion_calibrated_zpin_weighted | MILD | False     | 0.00  | 0.971 | 0.969 | 1.078 | 2.829 |
+| diffusion_failed_baseline_pr5b_3b3 | FAIL | False     | 0.00  | 1.000 | 1.000 | 181.0 | 143.0 |
+
+(KS / mass_ratio scale conventions differ per row — bootstrap is
+per-day-equivalent; the diffusion rows are raw at train-aggregate scale
+with mass_ratio rescaled ÷5. The structural gap is order-of-magnitude on KS
+and qualitative on top20, so it survives any reasonable rescaling.)
+
+**Decision**: the recommended Stage-5 scenario source is
+**`bootstrap_day_block`**. Rationale, against the decision rule
+(`can_freeze` → `tier` → `top20` → `row_ks` → `col_ks` → `|mass_ratio-1|`):
+
+  1. Bootstrap is the **only** candidate with `can_freeze_to_stage5=True` —
+     its candidate npy (`data/synthetic/od_samples_agg_bootstrap.npy`,
+     71.9 MB, `[64, 530, 530]` int32) already exists from PR5C-2B. Both
+     diffusion rows have `has_candidate_npy=False` (PR5C-1B deliberately
+     never wrote one).
+  2. All three non-baseline sources are MILD, so the tier check does not
+     separate them; structure decides.
+  3. Bootstrap dominates every structural axis: `top20` 11.89 vs 0,
+     `row_ks` 0.093 vs ≈0.97, `col_ks` 0.078 vs ≈0.97.
+
+**Posthoc-calibrated diffusion is retained as a paper comparison row, NOT
+as a downstream source.** Posthoc calibration is genuinely useful as a
+diagnostic — it cuts the diffusion over-density from 143× real to 2.8× —
+and belongs in the manuscript's scenario-generation comparison. But
+`top20_pair_overlap = 0` and `row/col KS ≈ 1` mean the calibrated samples
+have no usable spatial structure; feeding them to the Stage-5 RL
+environment would train the agent on a demand field uncorrelated with
+reality. The diffusion path is therefore a documented negative result,
+not a Stage-5 input.
+
+**The final freeze still requires user confirmation.** PR5C-3A only
+recommends; it writes nothing under `data/synthetic/`. PR5C-3B will, on
+explicit user go-ahead, copy the bootstrap candidate to
+`data/synthetic/od_samples_agg.npy`, verify the byte-copy, and record the
+freeze here. Until that entry exists, Stage 5
+(`docs/plan/stage5_rl_env.md`) remains blocked.
+
+**Explicit non-actions**: no training, no diffusion run, no resampling, no
+`data/synthetic/*.npy` created or modified, no Stage-5 code touched, no
+`models/` / `.claude/` / `docs/handoff/` / `tb/` changes. Tracked artefacts
+in this commit: `experiments/run_stage4_compare_scenarios.py`,
+`results/stage4/comparison/{metrics_all.csv, metrics_all.json,
+decision.md}`, plus `docs/progress.md` and this `docs/decisions.md` entry.
+
+## 2026-05-21 Stage 4B-5C PR5C-3B: bootstrap frozen as Stage-5 scenario source
+
+**Decision**: `bootstrap_day_block` is officially frozen as the Stage-5
+scenario source. The user confirmed the PR5C-3A recommendation, and
+PR5C-3B (this entry) executes the freeze:
+`data/synthetic/od_samples_agg_bootstrap.npy` was copied to
+`data/synthetic/od_samples_agg.npy`, the SHA-256 of source and destination
+verified identical (`327de8858deed51b0abe2b9018b51e7ddbd93054678429a4164c9db9cf9d2d18`),
+and the frozen array re-checked (`[64, 530, 530]` int32, nonnegative,
+`min/max/mean = 0/1257/1.662`).
+
+**What was frozen and why**: the bootstrap day-block sampler (PR5C-2A/2B)
+won the PR5C-3A unified comparison as the only freezeable candidate
+(`can_freeze_to_stage5=True`, candidate npy already on disk) and the clear
+structural winner — `top20_pair_overlap` 11.89 vs 0 for the diffusion
+rows, row/col KS ~10× better. It is a MILD-tier source, not PASS, but it
+is the best available and is usable: it preserves real OD hot-pair
+structure, respects the no-leak contract (`used_slots ⊆ train_slots`),
+and matches the `[N_ω, |Z|, |Z|]` int32 shape Stage 5 expects.
+
+**Diffusion path — retained as comparison, not source**: the raw and
+posthoc-calibrated diffusion rows (PR5B / PR5C-1B) are kept as manuscript
+comparison rows documenting a negative result — posthoc calibration cuts
+over-density (143× → 2.8× real) but cannot recover spatial structure
+(`top20=0`, KS ≈ 1). They are NOT a downstream Stage-5 input. The C1
+innovation in `CLAUDE.md` §8 ("diffusion-as-data-augmentation") is
+downgraded to the documented bootstrap fallback per
+`docs/plan/stage4_diffusion.md` "Robustness Note".
+
+**Provenance / tracking**: `data/synthetic/od_samples_agg.npy` (69 MB) is
+gitignored (`/data/` anchored-ignore) and NOT committed — it is
+deterministically regenerable via `experiments/run_stage4_bootstrap.py`
+(`seed=42`) or by re-copying the bootstrap candidate. A small tracked
+provenance file `data/synthetic/od_samples_agg_source.txt` (force-added,
+since `/data/` is gitignored) records the source name, source/frozen
+paths, shape, dtype, the SHA-256, and the PR5C-3A/3B selection/freeze
+lineage.
+
+**Stage 4 status**: the Stage-4 scenario-source selection is now CLOSED.
+Stage 4 delivered a usable scenario distribution via the bootstrap
+fallback rather than the originally-planned diffusion model; the
+diffusion failure and the fallback are fully documented across the
+PR5B / PR5C decision entries.
+
+**Stage 5 status**: UNBLOCKED. Stage 5 (`docs/plan/stage5_rl_env.md`) can
+now consume `data/synthetic/od_samples_agg.npy` as its diffusion-augmented
+scenario input (`p_real` mixing with the real `od_evtol_12km` aggregate
+per the Stage-5 plan). No Stage-5 code is written by this PR.
+
+**Explicit non-actions**: no training, no diffusion run, no model edits,
+no Stage-5 code; the `.npy` files are not committed; no `models/`,
+`results/`, `.claude/`, `docs/handoff/`, or `tb/` changes. Tracked
+artefacts in this commit: `docs/progress.md`, this `docs/decisions.md`
+entry, and `data/synthetic/od_samples_agg_source.txt`.
+
+## 2026-05-21 Stage 5 PR1: minimal VertiportEnv scaffold — deliberate deviations from the Stage-5 plan
+
+**Decision**: Stage 5 PR1 implements a *minimal* `VertiportEnv` scaffold
+(env + config + unit tests + smoke). It is a deliberate, reduced subset of
+`docs/plan/stage5_rl_env.md`; the items below differ from the plan **by
+design, not by omission**. The plan document remains the target for
+Stage 5 as a whole — PR2+ closes these gaps. Recorded here per Hard Rule 4.
+
+**Deviation 1 — simplified observation.** PR1's observation is the dict
+`{selected_mask [C], covered_zones [Z], remaining_budget, current_coverage_ratio}`.
+The plan's richer state (`demand_agg [|Z|, 4]` per-zone demand statistics,
+`cand_static [|C|, ~8]` candidate static features, explicit `step_idx`) is
+**not** implemented in PR1. Reason: PR1's goal is a functioning
+environment scaffold the RL loop can be wired against; the demand/static
+feature engineering is a separable task that benefits from being designed
+alongside the policy network. To be added in a later PR.
+
+**Deviation 2 — single frozen scenario source, no `p_real` mixing.** PR1
+samples episodes only from the frozen bootstrap scenario tensor
+`data/synthetic/od_samples_agg.npy` (`[64, 530, 530]` int32,
+`bootstrap_day_block`). The plan's `reset()` mixes the real `od_evtol`
+aggregate with diffusion samples at probability `p_real`. PR1 drops the
+`p_real` mechanism because Stage 4 (see this file, 2026-05-21 "Stage 4B-5C
+PR5C-3B") closed the scenario-source selection: diffusion was downgraded
+to a comparison row and `bootstrap_day_block` was frozen as the **sole**
+Stage-5 scenario input. The `p_real` branch in the plan is therefore
+superseded by the PR5C-3B freeze; a future ablation that needs the real
+OD aggregate directly can re-introduce a real-scenario channel then.
+
+**Deviation 3 — pure incremental-coverage reward, no penalties.** PR1's
+reward is exactly `incremental_bilateral_coverage` normalized by total OD
+demand. The plan's `overlap_penalty` (`lam_overlap`) and `land_cost`
+(`lam_cost`) terms are **not** implemented. Reason: PR1 fixes the core
+coverage-delta math first (the plan's "Common Pitfalls" flags this as the
+bug-prone part); the penalty terms are additive hooks that belong with a
+later PR or a Stage-6 ablation, and `land_cost` has no data yet.
+
+**Deviation 4 — no vectorized env / coverage module / config dataclass.**
+PR1 does not create `src/envs/vec_env.py`, `src/envs/coverage.py`, an
+`EnvConfig` dataclass (`src/envs/config.py`), or `smoke_test_vec_env.py`.
+Config is loaded from `configs/env.yaml` via PyYAML (consistent with the
+rest of the repo's pre-Hydra config handling). The vectorized env is a
+PR2 concern — it is only needed once PPO requires `n_envs` parallel
+rollouts.
+
+**Deviation 5 — Gymnasium-style class, `gymnasium` not imported.**
+`gymnasium` is not installed in the current environment and PR1 does not
+add it. `VertiportEnv` is implemented as a plain class following the
+Gymnasium contract exactly (`reset(seed, options) -> (obs, info)`,
+`step(action) -> (obs, reward, terminated, truncated, info)`,
+`action_masks() -> [C] bool`). Reason: keep PR1 self-contained and
+installable-dependency-free; the API is chosen so PR2 can make the class
+subclass `gymnasium.Env` with no behavioural change. Adding
+`gymnasium>=0.29` and `sb3-contrib` to `pyproject.toml` and wiring
+MaskablePPO is explicitly PR2 scope.
+
+**Conclusion**: these five points are scoping decisions to get a minimal
+usable environment scaffold + smoke in place quickly, not gaps left by
+accident. PR1's deliverable is the scaffold; Stage 5 PR2 enters the
+Gymnasium / MaskablePPO integration and begins closing deviations 1, 4
+and 5. No PPO training and no Stage 6 work are part of PR1. The Stage-5
+plan (`docs/plan/stage5_rl_env.md`) stays the reference for the full
+environment.
+
+**Tracked artefacts in this commit**: `configs/env.yaml`,
+`src/envs/__init__.py`, `src/envs/vertiport_env.py`,
+`tests/test_vertiport_env.py`, `experiments/run_stage5_env_smoke.py`,
+`docs/progress.md`, and this `docs/decisions.md` entry. **Explicit
+non-actions**: no PPO training, no Stage 6 work, no `gymnasium`/
+`sb3-contrib` install or `pyproject.toml` change, no Stage 4 result
+changes; no `data/`, `models/`, `results/`, `.claude/`, `docs/handoff/`,
+or `tb/` changes staged.
+
+## 2026-05-21 Stage 5 PR2: MaskablePPO training smoke — minimal RL stack wiring
+
+**Decision**: Stage 5 PR2 wires the RL training stack onto `VertiportEnv`
+and proves it runs, nothing more. Its deliverable is a *smoke test* — a
+512-timestep MaskablePPO `learn()` plus a 3-episode deterministic
+evaluation — **not** a PPO baseline. Recorded here so the smoke is not
+later mistaken for a paper result.
+
+**Dependency addition (Hard Rule 9).** `gymnasium>=1.0`,
+`stable-baselines3>=2.8` and `sb3-contrib>=2.8` are added to
+`pyproject.toml` `[project] dependencies` and installed into `.venv`
+(resolved versions: gymnasium 1.2.3, SB3 2.8.0, sb3-contrib 2.8.0).
+`sb3-contrib` provides MaskablePPO, which is the Stage-5/6 RL algorithm of
+record (`CLAUDE.md` §8: "RL: MaskablePPO"). `ray` / `rllib` are
+deliberately **not** added — SB3 covers the planned training and CVaR
+work; a second RL framework would be dead weight.
+
+**`VertiportEnv` is now a `gymnasium.Env`.** PR1 Deviation 5 (plain class,
+no `gymnasium` import) is closed: the class subclasses `gymnasium.Env`,
+declares `action_space`/`observation_space`, and the two scalar
+observation fields became shape-`(1,)` float32 arrays so
+`observation_space.contains(obs)` holds. The MDP — `reset`, `step`,
+`action_masks`, reward — is behaviourally unchanged from PR1.
+
+**What PR2 deliberately does NOT do.** (1) No paper-grade PPO baseline —
+training is capped at 512 timesteps purely to exercise the code path.
+(2) No complex observation feature engineering — PR1 Deviation 1
+(`demand_agg` / `cand_static` features) stays open; consequently the
+trained policy is scenario-blind (it selects an identical candidate
+sequence across scenarios because the observation carries no per-scenario
+demand signal). (3) No CVaR — the robustness objective (`CLAUDE.md` §8 C2)
+is not implemented. (4) No vectorized env, no callbacks, no
+hyperparameter tuning. (5) No Stage 6 work.
+
+**Where the real RL work lives.** The formal PPO baseline, the
+demand-aware observation, the CVaR-PPO robustness objective and proper
+training/evaluation protocol are **Stage 6** (`docs/plan/stage6_*`). PR2
+only guarantees that `VertiportEnv` plugs into MaskablePPO and that a
+train→eval loop completes without error.
+
+**Tracked artefacts in this commit**: `pyproject.toml`,
+`src/envs/vertiport_env.py`, `tests/test_vertiport_env.py`,
+`experiments/run_stage5_maskableppo_smoke.py`,
+`results/stage5/maskableppo_smoke/metrics.json` (small smoke-provenance
+record), `docs/progress.md`, and this `docs/decisions.md` entry.
+**Explicit non-actions**: no long/baseline training, no CVaR, no Stage 6
+work, no `ray`/`rllib`; `models/rl/maskableppo_smoke/model.zip` is not
+committed (`models/` gitignored); no `data/`, `.claude/`, `docs/handoff/`,
+or `tb/` changes staged.
+
+
+

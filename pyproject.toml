@@ -38,6 +38,13 @@ dependencies = [
     # writer requires the standalone `tensorboard` package. WandB
     # intentionally NOT a dep -- see Stage 4B-3 PR-1 decisions.
     "tensorboard>=2.20",
+    # Stage-5 RL environment + training. gymnasium for the Env API;
+    # stable-baselines3 for the PPO machinery; sb3-contrib for
+    # MaskablePPO (action masking over already-placed candidates).
+    # ray/rllib intentionally NOT included -- SB3 covers Stage 5/6.
+    "gymnasium>=1.0",
+    "stable-baselines3>=2.8",
+    "sb3-contrib>=2.8",
 ]
 
 [project.optional-dependencies]
