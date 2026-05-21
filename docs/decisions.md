@@ -1719,4 +1719,60 @@ in this commit: `experiments/run_stage4_compare_scenarios.py`,
 `results/stage4/comparison/{metrics_all.csv, metrics_all.json,
 decision.md}`, plus `docs/progress.md` and this `docs/decisions.md` entry.
 
+## 2026-05-21 Stage 4B-5C PR5C-3B: bootstrap frozen as Stage-5 scenario source
+
+**Decision**: `bootstrap_day_block` is officially frozen as the Stage-5
+scenario source. The user confirmed the PR5C-3A recommendation, and
+PR5C-3B (this entry) executes the freeze:
+`data/synthetic/od_samples_agg_bootstrap.npy` was copied to
+`data/synthetic/od_samples_agg.npy`, the SHA-256 of source and destination
+verified identical (`327de8858deed51b0abe2b9018b51e7ddbd93054678429a4164c9db9cf9d2d18`),
+and the frozen array re-checked (`[64, 530, 530]` int32, nonnegative,
+`min/max/mean = 0/1257/1.662`).
+
+**What was frozen and why**: the bootstrap day-block sampler (PR5C-2A/2B)
+won the PR5C-3A unified comparison as the only freezeable candidate
+(`can_freeze_to_stage5=True`, candidate npy already on disk) and the clear
+structural winner — `top20_pair_overlap` 11.89 vs 0 for the diffusion
+rows, row/col KS ~10× better. It is a MILD-tier source, not PASS, but it
+is the best available and is usable: it preserves real OD hot-pair
+structure, respects the no-leak contract (`used_slots ⊆ train_slots`),
+and matches the `[N_ω, |Z|, |Z|]` int32 shape Stage 5 expects.
+
+**Diffusion path — retained as comparison, not source**: the raw and
+posthoc-calibrated diffusion rows (PR5B / PR5C-1B) are kept as manuscript
+comparison rows documenting a negative result — posthoc calibration cuts
+over-density (143× → 2.8× real) but cannot recover spatial structure
+(`top20=0`, KS ≈ 1). They are NOT a downstream Stage-5 input. The C1
+innovation in `CLAUDE.md` §8 ("diffusion-as-data-augmentation") is
+downgraded to the documented bootstrap fallback per
+`docs/plan/stage4_diffusion.md` "Robustness Note".
+
+**Provenance / tracking**: `data/synthetic/od_samples_agg.npy` (69 MB) is
+gitignored (`/data/` anchored-ignore) and NOT committed — it is
+deterministically regenerable via `experiments/run_stage4_bootstrap.py`
+(`seed=42`) or by re-copying the bootstrap candidate. A small tracked
+provenance file `data/synthetic/od_samples_agg_source.txt` (force-added,
+since `/data/` is gitignored) records the source name, source/frozen
+paths, shape, dtype, the SHA-256, and the PR5C-3A/3B selection/freeze
+lineage.
+
+**Stage 4 status**: the Stage-4 scenario-source selection is now CLOSED.
+Stage 4 delivered a usable scenario distribution via the bootstrap
+fallback rather than the originally-planned diffusion model; the
+diffusion failure and the fallback are fully documented across the
+PR5B / PR5C decision entries.
+
+**Stage 5 status**: UNBLOCKED. Stage 5 (`docs/plan/stage5_rl_env.md`) can
+now consume `data/synthetic/od_samples_agg.npy` as its diffusion-augmented
+scenario input (`p_real` mixing with the real `od_evtol_12km` aggregate
+per the Stage-5 plan). No Stage-5 code is written by this PR.
+
+**Explicit non-actions**: no training, no diffusion run, no model edits,
+no Stage-5 code; the `.npy` files are not committed; no `models/`,
+`results/`, `.claude/`, `docs/handoff/`, or `tb/` changes. Tracked
+artefacts in this commit: `docs/progress.md`, this `docs/decisions.md`
+entry, and `data/synthetic/od_samples_agg_source.txt`.
+
+
 
