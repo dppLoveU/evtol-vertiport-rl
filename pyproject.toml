@@ -22,6 +22,22 @@ dependencies = [
     "shapely>=2.0",
     "folium>=0.15",
     "branca>=0.7",
+    # Stage-4 diffusion model. torch is installed from the PyTorch
+    # cu128 wheel index (see docs/decisions.md 2026-05-20) for Blackwell
+    # (RTX 50-series) support; the pinned version below is the wheel
+    # that lands when running ``pip install torch --index-url
+    # https://download.pytorch.org/whl/cu128``. torchvision/torchaudio
+    # are intentionally NOT included -- the Stage-4 pipeline does not
+    # need them.
+    "torch>=2.11",
+    # einops: clean rearrange/repeat for the diffusion U-Net (Stage 4B).
+    # Tiny (~65 KB), no native deps.
+    "einops>=0.8",
+    # tensorboard backend for Stage 4B-3 training logging. torch ships the
+    # `torch.utils.tensorboard.SummaryWriter` API surface, but the actual
+    # writer requires the standalone `tensorboard` package. WandB
+    # intentionally NOT a dep -- see Stage 4B-3 PR-1 decisions.
+    "tensorboard>=2.20",
 ]
 
 [project.optional-dependencies]
