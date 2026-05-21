@@ -1656,3 +1656,67 @@ metrics.csv, calibration_grid.png, marginal_match_before_after.png,
 decision_report.md}`, plus `docs/progress.md` and this `docs/decisions.md`
 entry.
 
+## 2026-05-21 Stage 4B-5C PR5C-3A: unified comparison recommends bootstrap
+
+**Context**: PR5C-2B (commit `c0f0c71`) produced the bootstrap scenario
+candidate (MILD); PR5C-1B (commit `77ee87c`) produced the posthoc-calibrated
+diffusion diagnostic (MILD, no candidate npy). PR5C-3A (this entry) is the
+unified comparison: a new CLI `experiments/run_stage4_compare_scenarios.py`
+reads both per-source metrics JSON files, builds one comparison table, and
+recommends a Stage-5 scenario source. **No source is frozen by this PR** —
+`data/synthetic/od_samples_agg.npy` is still not generated; the freeze is a
+separate sub-PR (PR5C-3B) gated on explicit user confirmation.
+
+**Comparison table** (four sources, sorted by the decision rule):
+
+| source | tier | freezeable | top20 | row_ks | col_ks | mass_ratio | nz_x_real |
+|--------|------|-----------|-------|--------|--------|-----------|-----------|
+| bootstrap_day_block                | MILD | **True**  | 11.89 | 0.093 | 0.078 | 1.126 | 2.677 |
+| diffusion_raw_zpin_weighted_pilot  | MILD | False     | 0.00  | 0.961 | 0.966 | 0.819 | 5.831 |
+| diffusion_calibrated_zpin_weighted | MILD | False     | 0.00  | 0.971 | 0.969 | 1.078 | 2.829 |
+| diffusion_failed_baseline_pr5b_3b3 | FAIL | False     | 0.00  | 1.000 | 1.000 | 181.0 | 143.0 |
+
+(KS / mass_ratio scale conventions differ per row — bootstrap is
+per-day-equivalent; the diffusion rows are raw at train-aggregate scale
+with mass_ratio rescaled ÷5. The structural gap is order-of-magnitude on KS
+and qualitative on top20, so it survives any reasonable rescaling.)
+
+**Decision**: the recommended Stage-5 scenario source is
+**`bootstrap_day_block`**. Rationale, against the decision rule
+(`can_freeze` → `tier` → `top20` → `row_ks` → `col_ks` → `|mass_ratio-1|`):
+
+  1. Bootstrap is the **only** candidate with `can_freeze_to_stage5=True` —
+     its candidate npy (`data/synthetic/od_samples_agg_bootstrap.npy`,
+     71.9 MB, `[64, 530, 530]` int32) already exists from PR5C-2B. Both
+     diffusion rows have `has_candidate_npy=False` (PR5C-1B deliberately
+     never wrote one).
+  2. All three non-baseline sources are MILD, so the tier check does not
+     separate them; structure decides.
+  3. Bootstrap dominates every structural axis: `top20` 11.89 vs 0,
+     `row_ks` 0.093 vs ≈0.97, `col_ks` 0.078 vs ≈0.97.
+
+**Posthoc-calibrated diffusion is retained as a paper comparison row, NOT
+as a downstream source.** Posthoc calibration is genuinely useful as a
+diagnostic — it cuts the diffusion over-density from 143× real to 2.8× —
+and belongs in the manuscript's scenario-generation comparison. But
+`top20_pair_overlap = 0` and `row/col KS ≈ 1` mean the calibrated samples
+have no usable spatial structure; feeding them to the Stage-5 RL
+environment would train the agent on a demand field uncorrelated with
+reality. The diffusion path is therefore a documented negative result,
+not a Stage-5 input.
+
+**The final freeze still requires user confirmation.** PR5C-3A only
+recommends; it writes nothing under `data/synthetic/`. PR5C-3B will, on
+explicit user go-ahead, copy the bootstrap candidate to
+`data/synthetic/od_samples_agg.npy`, verify the byte-copy, and record the
+freeze here. Until that entry exists, Stage 5
+(`docs/plan/stage5_rl_env.md`) remains blocked.
+
+**Explicit non-actions**: no training, no diffusion run, no resampling, no
+`data/synthetic/*.npy` created or modified, no Stage-5 code touched, no
+`models/` / `.claude/` / `docs/handoff/` / `tb/` changes. Tracked artefacts
+in this commit: `experiments/run_stage4_compare_scenarios.py`,
+`results/stage4/comparison/{metrics_all.csv, metrics_all.json,
+decision.md}`, plus `docs/progress.md` and this `docs/decisions.md` entry.
+
+
