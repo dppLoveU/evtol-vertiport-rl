@@ -2034,3 +2034,80 @@ baselines, no SpoNet, no Stage 7 work, no new dependency;
 `models/rl/ppo_a6_bootstrap_demand_20k_seed42/model.zip` is not
 committed (`models/` gitignored); no `data/`, `.claude/`,
 `docs/handoff/`, or `tb/` changes staged.
+
+## 2026-05-21 Stage 6 PR3: greedy + diversity diagnostic — RL value is unproven, CVaR on hold
+
+**Decision**: Before investing in longer PPO training, a custom policy,
+or CVaR, Stage 6 PR3 runs a diagnostic to answer two questions: (1) how
+degenerate is the frozen bootstrap scenario set, and (2) does the PR1/PR2
+PPO policy actually beat a trivial greedy heuristic. The answers decide
+whether further RL work is even worthwhile yet.
+
+**What PR3 built.**
+
+1. **Greedy baseline** (`src/baselines/greedy.py`). A deterministic
+   greedy marginal-coverage heuristic — the standard A1-family reference
+   for facility-location problems. It does NOT use `VertiportEnv.step`,
+   because greedy must scan every unselected candidate's marginal gain
+   per step; the gain is computed via a `delta`-decomposition so no
+   `[C, Z, Z]` tensor is built.
+
+2. **Scenario-diversity diagnostic** (`experiments/run_stage6_diagnostics.py`).
+   Quantifies how much the 64 bootstrap scenarios differ in their
+   per-zone demand summary, with a PASS/FAIL verdict.
+
+**Findings (the substantive outcome).**
+
+- **Scenario diversity: FAIL.** Per-element std of the normalized demand
+  summary across the 64 scenarios is `std_mean = 0.000755` (threshold
+  `> 0.01`) and `std_max = 0.010561` (threshold `> 0.05`) — roughly an
+  order of magnitude below the bar. The bootstrap day-block sampler
+  resamples the same real OD data, so all 64 scenarios are structurally
+  near-identical. This confirms and quantifies the PR2 observation.
+
+- **Greedy beats PPO.** Greedy mean coverage is 0.4323 vs PPO-static
+  0.3615 and PPO-demand 0.3352 — `greedy - PPO_static = +0.0707`
+  (+19.6% relative). Greedy also produces 6 distinct selected sequences
+  across scenarios; both PPO runs produce exactly 1.
+
+**Consequences.**
+
+1. **The PR1/PR2 PPO numbers are not a contribution as-is.** A trivial
+   deterministic greedy heuristic outperforms the trained policy on the
+   current scenario set. Reporting 0.3615 as an RL result would not
+   survive review. (The 20k budget is also far short of the planned 2M,
+   so PPO is undertrained — but that is secondary to the structural
+   problem below.)
+
+2. **CVaR is on hold.** The paper's C2 robustness story (CLAUDE.md §8)
+   optimizes CVaR over *scenario variation*. With scenario diversity
+   FAIL there is essentially no variation to be robust against — a CVaR
+   objective would be indistinguishable from the expectation objective.
+   CVaR work should not start until scenario diversity passes.
+
+3. **Recommendation A (from the diagnostic's own decision rule): fix
+   scenario generation first.** The scenario set must regain real
+   structural variation — e.g. a working diffusion source, or
+   perturbation-based scenarios — before further RL training, a custom
+   `CandidateTokenExtractor`, or CVaR is worthwhile.
+
+**This is a plan-affecting finding (Hard Rule 4).** The Stage-6 plan
+(`docs/plan/stage6_rl_training.md`) assumes the A5/A6/A7 ladder runs on a
+usable scenario set. PR3 shows the current frozen set is not usable for
+demonstrating an RL or robustness contribution. PR3 itself only
+diagnoses and records this; it does NOT regenerate scenarios, switch the
+diffusion source, or add perturbation. **The next step — fix the
+scenario set vs. proceed anyway — is a user decision and is deferred to
+the user.**
+
+**Tracked artefacts in this commit**: `src/baselines/__init__.py`,
+`src/baselines/greedy.py`, `experiments/run_stage6_diagnostics.py`,
+`tests/test_greedy_baseline.py`,
+`results/stage6/diagnostics/scenario_diversity.json`,
+`results/stage6/diagnostics/greedy_baseline.json`,
+`results/stage6/diagnostics/comparison.csv`,
+`results/stage6/diagnostics/diagnostic_report.md`, `docs/progress.md`,
+and this `docs/decisions.md` entry. **Explicit non-actions**: no PPO
+training, no CVaR, no custom policy, no scenario regeneration or
+perturbation, no diffusion-source switch, no Stage 7 work; no `models/`,
+`data/`, `.claude/`, `docs/handoff/`, or `tb/` changes staged.

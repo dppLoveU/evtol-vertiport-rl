@@ -1,0 +1,5 @@
+method,mean_coverage,unique_selected_sequences,notes
+random_pr1_smoke,0.1047,,PR1 random-policy smoke reference
+ppo_static_20k,0.36154526513798424,1,"Stage 6 PR1, static observation"
+ppo_demand_20k,0.3352048217600905,1,"Stage 6 PR2, demand-aware observation"
+greedy_marginal,0.4322613282112788,6,"Stage 6 PR3, greedy marginal-coverage baseline"
