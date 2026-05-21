@@ -1,0 +1,36 @@
+# Stage-6 PR1 PPO training config (PyYAML; Hydra wiring is a future
+# task -- see docs/decisions.md 2026-05-14). Loaded by
+# experiments/run_stage6_train.py. The keys here are the source of
+# truth; code reads them and never hardcodes values.
+#
+# This is the Stage-6 PR1 training-harness mini run: a 20k-timestep
+# MaskablePPO run on the frozen bootstrap scenario source. It is NOT
+# the final paper baseline -- the full A5/A6/A7 ablation ladder and
+# CVaR are later Stage-6 work. See docs/decisions.md 2026-05-21
+# "Stage 6 PR1".
+
+run_name: ppo_a6_bootstrap_20k_seed42
+seed: 42
+env_config: configs/env.yaml
+method: A6_bootstrap_expectation
+policy: MultiInputPolicy
+
+train:
+  total_timesteps: 20000
+  n_steps: 256
+  batch_size: 256
+  gamma: 1.0
+  learning_rate: 3.0e-4
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  device: auto
+
+eval:
+  eval_episodes: 16
+  deterministic: true
+  eval_every: 5000
+
+output:
+  result_dir: results/stage6/ppo_a6_bootstrap_20k_seed42
+  model_dir: models/rl/ppo_a6_bootstrap_20k_seed42

@@ -1899,3 +1899,60 @@ or `tb/` changes staged.
 
 
 
+
+## 2026-05-21 Stage 6 PR1: PPO training harness — scope and deliberate scope cuts
+
+**Decision**: Stage 6 PR1 delivers a *reusable PPO training entrypoint*
+(`experiments/run_stage6_train.py` + `configs/ppo_vertiport.yaml`) and a
+single 20k-timestep MaskablePPO mini run on the frozen bootstrap
+scenario source. Its purpose is to stand up the formal training entry
+point and pin down the result schema (`metrics.json` / `selected.json` /
+`config.yaml`) so later Stage-6 runs can reuse them. It is **not** the
+final paper baseline.
+
+**Deliberate scope cuts for fast progress.** To get the training entry
+point in place quickly, PR1 explicitly does NOT do, and defers:
+
+1. **MultiInputPolicy, not a custom extractor.** PR1 uses SB3's stock
+   `MultiInputPolicy`. The custom `CandidateTokenExtractor` /
+   per-candidate attention policy (`docs/plan/stage6_rl_training.md`
+   "Policy Network", `src/agents/policy.py`) is deferred. Consequence:
+   the policy is scenario-blind (PR1 Deviation 1 of Stage 5 — the
+   observation carries no per-scenario demand signal), so it picks an
+   identical candidate sequence across eval episodes.
+
+2. **Frozen bootstrap scenarios, expectation objective only.** The run
+   is `method=A6_bootstrap_expectation`: PPO over the fixed 64-scenario
+   bootstrap set with the plain expectation objective. No CVaR
+   (`A7` / `src/agents/cvar_wrapper.py`) — deferred.
+
+3. **No A5 / A7 runs, no A0-A4 baselines, no sensitivity sweep, no
+   SpoNet.** The full ablation ladder, the `src/baselines/` methods, the
+   `K`/`R` sweep, and the SpoNet adapter are all later Stage-6 work.
+
+4. **No WandB, no TensorBoard.** PR1 writes plain JSON/YAML artefacts
+   only; logging-backend wiring is deferred.
+
+5. **20k timesteps, not the planned 2M.** This is a harness shakedown
+   run, not a converged baseline; it completed on cuda in ~40 s.
+
+**Eval protocol.** A single post-training deterministic masked eval of
+`eval_episodes=16` episodes. The `eval.eval_every=5000` config key is
+recorded for later use but PR1 does not implement an in-training eval
+callback (`src/agents/callbacks.py` is deferred).
+
+**Result**: device cuda (no CPU fallback), train wall 39.93 s, eval mean
+coverage 0.361545 (std 0.002139, min 0.358145, max 0.366000) — above the
+PR2 smoke 0.1415 and the PR1 random-policy 0.1047.
+
+**Tracked artefacts in this commit**: `configs/ppo_vertiport.yaml`,
+`experiments/run_stage6_train.py`,
+`results/stage6/ppo_a6_bootstrap_20k_seed42/metrics.json`,
+`results/stage6/ppo_a6_bootstrap_20k_seed42/selected.json`,
+`results/stage6/ppo_a6_bootstrap_20k_seed42/config.yaml`,
+`docs/progress.md`, and this `docs/decisions.md` entry. **Explicit
+non-actions**: no CVaR, no custom policy, no A0-A4 baselines, no A5/A7
+runs, no sensitivity sweep, no SpoNet, no Stage 7 work, no new
+dependency; `models/rl/ppo_a6_bootstrap_20k_seed42/model.zip` is not
+committed (`models/` gitignored); no `data/`, `.claude/`,
+`docs/handoff/`, or `tb/` changes staged.

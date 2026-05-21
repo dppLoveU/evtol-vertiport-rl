@@ -1,0 +1,45 @@
+{
+  "kind": "stage6_pr1_maskableppo_train",
+  "note": "training harness / mini run, NOT the final paper baseline",
+  "run_name": "ppo_a6_bootstrap_20k_seed42",
+  "method": "A6_bootstrap_expectation",
+  "config": "/home/yuri/code/transportation/evtol-vertiport-rl/configs/ppo_vertiport.yaml",
+  "env_config": "/home/yuri/code/transportation/evtol-vertiport-rl/configs/env.yaml",
+  "seed": 42,
+  "device": "cuda",
+  "cuda_fallback": false,
+  "versions": {
+    "gymnasium": "1.2.3",
+    "stable_baselines3": "2.8.0",
+    "sb3_contrib": "2.8.0"
+  },
+  "env": {
+    "n_omega": 64,
+    "n_zones": 530,
+    "n_candidates": 813,
+    "k_select": 10
+  },
+  "ppo": {
+    "policy": "MultiInputPolicy",
+    "total_timesteps": 20000,
+    "n_steps": 256,
+    "batch_size": 256,
+    "gamma": 1.0,
+    "learning_rate": 0.0003,
+    "ent_coef": 0.01,
+    "vf_coef": 0.5,
+    "max_grad_norm": 0.5
+  },
+  "train_wall_s": 39.929,
+  "eval": {
+    "eval_episodes": 16,
+    "deterministic": true,
+    "protocol": "single post-training deterministic masked eval",
+    "mean_coverage": 0.36154526513798424,
+    "std_coverage": 0.002139201748549476,
+    "min_coverage": 0.35814503187752095,
+    "max_coverage": 0.3660003634001725,
+    "mean_total_reward": 0.36154526513798424
+  },
+  "model_path": "/home/yuri/code/transportation/evtol-vertiport-rl/models/rl/ppo_a6_bootstrap_20k_seed42/model.zip"
+}
