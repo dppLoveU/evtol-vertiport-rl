@@ -1,0 +1,98 @@
+{
+  "acceptance": "mild",
+  "col_sum_ks_stat": {
+    "mean": 0.07768278301886794,
+    "std": 0.0058967423123361526
+  },
+  "col_sum_ks_stat_raw": {
+    "mean": 0.8204599056603775,
+    "std": 0.0036570866055331847
+  },
+  "config": "configs/diffusion_12km.yaml",
+  "dtype": "int32",
+  "entropy": {
+    "mean": 9.852159555094854,
+    "std": 0.03296645570653374
+  },
+  "gen_max": {
+    "max": 1257,
+    "mean": 1152.59375
+  },
+  "gen_mean": {
+    "mean": 1.6622503559985762,
+    "std": 0.01949946537433378
+  },
+  "gen_nonzero_ratio": {
+    "mean": 0.17397961908152365,
+    "std": 0.010418831723691584
+  },
+  "gen_nonzero_ratio_x_real_test": {
+    "mean": 2.6769760626643295,
+    "std": 0.16031166910522382
+  },
+  "n_days_per_scenario": 11,
+  "n_omega": 64,
+  "n_test_days": 1,
+  "n_val_days": 1,
+  "nonnegative": true,
+  "output_npy": "data/synthetic/od_samples_agg_bootstrap.npy",
+  "per_day_total_mass": {
+    "mean": 42447.829545454544,
+    "std": 497.9454385136692
+  },
+  "per_day_total_mass_ratio": {
+    "mean": 1.125638545358116,
+    "std": 0.013204599271112965
+  },
+  "real_per_day_test_total_mass": 37710.0,
+  "real_test_entropy": 9.313188099814191,
+  "real_test_max": 121,
+  "real_test_mean": 0.13424706301174796,
+  "real_test_nonzero_ratio": 0.06499110003559985,
+  "real_test_total_mass": 37710.0,
+  "real_val_nonzero_ratio": 0.06833036667853329,
+  "real_val_total_mass": 40000.0,
+  "row_sum_ks_stat": {
+    "mean": 0.09313089622641507,
+    "std": 0.0035513446976009537
+  },
+  "row_sum_ks_stat_raw": {
+    "mean": 0.8054834905660377,
+    "std": 0.003572451523514412
+  },
+  "sample_shape": [
+    64,
+    530,
+    530
+  ],
+  "sampler_summary": {
+    "global_max": 1257,
+    "global_min": 0,
+    "n_omega": 64,
+    "nonzero_ratio_mean": 0.17397961908152365,
+    "nonzero_ratio_std": 0.010418831723691584,
+    "total_sum_mean": 466926.125,
+    "total_sum_std": 5477.39982365036,
+    "z": 530
+  },
+  "seed": 42,
+  "top20_pair_overlap": {
+    "mean": 11.890625,
+    "std": 0.8123497457222474
+  },
+  "top20_pair_overlap_against_top50": {
+    "mean": 19.828125,
+    "std": 0.4166341133116682
+  },
+  "total_mass": {
+    "mean": 466926.125,
+    "std": 5477.39982365036
+  },
+  "total_mass_ratio_raw": {
+    "mean": 12.382023998939273,
+    "std": 0.14525059198224233
+  },
+  "used_slots_count": 240,
+  "used_slots_subset_of_train_slots": true,
+  "z": 530
+}

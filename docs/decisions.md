@@ -1454,3 +1454,111 @@ commit archives only the failed-diagnostic artifacts under
 train_log.jsonl) plus this `docs/decisions.md` entry and the matching
 `docs/progress.md` line. The next sub-stage (PR5B-4 or a renumbered
 strategy PR) is deferred pending the strategy decision above.
+
+## 2026-05-21 Stage 4B-5C PR5C-2B: bootstrap fallback candidate generated (MILD, not PASS)
+
+**Context**: PR5C-2A (commit `dc4236f`) shipped the `ConditionalBootstrapSampler`
+module + 19 unit tests. PR5C-2B (this entry) runs that sampler against the real
+12 km eVTOL OD tensor to produce the candidate Stage-4 fallback artefact
+`data/synthetic/od_samples_agg_bootstrap.npy`. The frozen Stage-5 input
+`data/synthetic/od_samples_agg.npy` is **not** touched in this PR: the
+`run_stage4_bootstrap.py` CLI carries explicit refusal guards against both
+`od_samples_agg.npy` and `od_samples.npy` paths, and the file is still absent on
+disk. Selection of which scenario source feeds Stage 5 is deferred to PR5C-3.
+
+**Command**: `python -m experiments.run_stage4_bootstrap --config configs/diffusion_12km.yaml --output data/synthetic/od_samples_agg_bootstrap.npy --results-dir results/stage4/bootstrap --n-omega 64 --seed 42 --n-days-per-scenario 11 --slots-per-day 48`.
+The 12 km train split is `[0, 5)` days = slots 0..239 (5 day blocks of 48 slots
+each); val day = `[5, 6)` slots 240..287; test day = `[6, 7)` slots 288..335.
+Each bootstrap scenario draws 11 day blocks **with replacement** from those 5
+train day blocks and sums their OD slices over the time axis, yielding an
+11-day-equivalent aggregate. Output:
+
+  * shape `(64, 530, 530)`, dtype `int32`, nonnegative (`min=0, max=1257,
+    mean=1.662`, total mass 29 883 272, on-disk 71.9 MB).
+  * `used_slots = 240` (the full train split was exercised at least once across
+    the 64 × 11 = 704 day-block draws); `used_slots ⊆ train_slots = True`;
+    `leaked_to_val = 0`, `leaked_to_test = 0`. The sampler's internal `used -
+    set(train_slots) == ∅` defensive check did not fire.
+
+**Pass / mild / fail bands** (recorded here so they survive future
+re-evaluations): comparisons against `real_test` are done at
+**per-day-equivalent** scale (bootstrap aggregates 11 days, `real_test`
+aggregates 1 day on the 12 km split, so apples-to-apples requires dividing
+bootstrap by `n_days_per_scenario` and `real_test` by `n_test_days`).
+
+  * **pass**: `gen_nonzero_ratio_x_real_test ∈ [0.7, 1.5]` AND
+    `per_day_total_mass_ratio ∈ [0.7, 1.5]` AND per-day `row_sum_ks ≤ 0.3` AND
+    per-day `col_sum_ks ≤ 0.3` AND `top20_pair_overlap_mean ≥ 14`.
+  * **mild**: strictly beats the failed-diffusion PR5B-3b-3 baseline on every
+    headline axis (`row_sum_ks=1.000`, `col_sum_ks=1.000`,
+    `gen_nonzero_ratio_x_real=143.0`, `total_mass_ratio_x_real_per_day=181.0`)
+    but at least one PASS gate fails.
+  * **fail**: matches or worsens the failed-diffusion baseline.
+
+**Verdict: MILD** — 3 of 5 PASS gates met, all 4 MILD gates met.
+
+| gate                                  | bootstrap | pass band   | met? |
+|---------------------------------------|-----------|-------------|------|
+| `gen_nonzero_ratio_x_real_test` (mean) | **2.677** | [0.7, 1.5]  | ✗    |
+| `per_day_total_mass_ratio` (mean)      | **1.126** | [0.7, 1.5]  | ✓    |
+| `per_day_row_sum_ks` (mean)            | **0.093** | ≤ 0.3       | ✓    |
+| `per_day_col_sum_ks` (mean)            | **0.078** | ≤ 0.3       | ✓    |
+| `top20_pair_overlap` (mean / 20)       | **11.89** | ≥ 14        | ✗    |
+
+Improvement vs failed-diffusion PR5B-3b-3 (per-day-equivalent):
+
+| axis                          | bootstrap | PR5B-3b-3 | × better |
+|-------------------------------|-----------|-----------|----------|
+| row_sum_ks (per-day)          | 0.093     | 1.000     | 10.8 ×   |
+| col_sum_ks (per-day)          | 0.078     | 1.000     | 12.8 ×   |
+| gen_nonzero_ratio × real      | 2.68      | 143.0     | 53.4 ×   |
+| per-day total_mass_ratio      | 1.13      | 181.0     | 160 ×    |
+
+Diagnostic numbers (`results/stage4/bootstrap/metrics.json`):
+`gen_nonzero_ratio.mean = 0.1740`, `real_test_nonzero_ratio = 0.0650`,
+`gen_max.mean = 1152.6, max = 1257` vs `real_test_max = 121` (consistent with
+the 11-day aggregation), `entropy.mean = 9.852 nats` vs `real_test_entropy =
+9.313 nats`, `top20_pair_overlap_against_top50.mean = 19.83 / 20` (ranking
+quality is high; the missed gate is the strict top-20 cutoff between a
+Mon-Fri-weighted bootstrap and a Sunday test day). Raw-scale (no per-day
+normalisation) numbers are kept for transparency: `total_mass_ratio_raw.mean =
+12.38` (matches `n_days_per_scenario / n_test_days = 11 / 1`),
+`row_sum_ks_stat_raw.mean = 0.805`, `col_sum_ks_stat_raw.mean = 0.820` — these
+are dominated by the 11× scale mismatch, which is why the per-day-normalised
+view is the primary acceptance surface.
+
+**Interpretation**: the two missed PASS gates are explainable as
+aggregation/temporal-coverage artefacts, NOT model failures:
+
+  1. `gen_nonzero_ratio` is intrinsically not scale-invariant under
+     day-summation: the union of nonzero OD cells across 11 train days exceeds
+     the nonzero set of a single test day, so the 2.68 × ratio is partly an
+     unavoidable consequence of aggregating more calendar days.
+  2. `top20_pair_overlap = 11.89 / 20` against a Sunday test day reflects
+     Mon-Fri vs weekend behaviour; the 19.83 / 20 `top20_vs_top50` overlap
+     confirms ranking is right, only the cutoff is mismatched.
+
+**Status**: bootstrap is a **usable candidate** for the Stage-4 fallback path —
+it strongly improves over failed diffusion on KS / nonzero-ratio / total-mass,
+respects the no-leak contract empirically, and produces a 71.9 MB int32
+`[64, 530, 530]` artefact that already matches the Stage-5
+`od_samples_agg.npy` shape contract from `docs/plan/stage4_diffusion.md`
+"Outputs". It is **not** yet PASS, and the frozen Stage-5 source is **not**
+chosen here.
+
+**Explicit non-actions**: Stage 5 is **still blocked** until PR5C-3 selects a
+scenario source. No `data/synthetic/od_samples_agg.npy` written; no diffusion
+training, posthoc calibration, or Stage-5 code edited in this commit. The
+PR5C-1 posthoc-calibration direction is preserved as an **optional**
+comparison input for PR5C-3 — bootstrap now provides a concrete competing
+candidate so PR5C-3's comparison is no longer one-sided. The decision rule
+for PR5C-3 is unchanged: select a source, document the verdict here, and
+only then (with user confirmation) copy the chosen file to
+`data/synthetic/od_samples_agg.npy`.
+
+**Tracked artefacts (committed in this PR)**: `experiments/run_stage4_bootstrap.py`,
+`results/stage4/bootstrap/{metrics.json, metrics.csv, marginal_match.png,
+summary.md}`, plus the matching `docs/progress.md` line and this
+`docs/decisions.md` entry. `data/synthetic/od_samples_agg_bootstrap.npy` is
+**untracked** (`/data/` is anchored-ignored in `.gitignore`); regeneration is
+deterministic via the command above with `seed=42`.
